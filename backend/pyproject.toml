@@ -1,0 +1,12 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "FastAPI backend for Agentic Debate UI"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi",
+    "litellm",
+    "pydantic",
+    "python-dotenv",
+    "uvicorn",
+]
