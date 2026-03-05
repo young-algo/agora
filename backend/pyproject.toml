@@ -5,8 +5,13 @@ description = "FastAPI backend for Agentic Debate UI"
 requires-python = ">=3.9"
 dependencies = [
     "fastapi",
-    "litellm",
+    "openai",
+    "anthropic",
+    "google-genai",
     "pydantic",
     "python-dotenv",
     "uvicorn",
 ]
+
+[tool.setuptools]
+py-modules = ["api", "debate_system"]

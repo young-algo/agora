@@ -21,7 +21,7 @@ import {
     saveCustomPreset
 } from "./lib/presets";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8001";
 
 const EMPTY_RUN_STATE = {
     status: "idle",
@@ -37,9 +37,13 @@ const EMPTY_RUN_STATE = {
 function makeAgent(index) {
     return {
         name: `agent-${index}`,
-        model: "openai/gpt-4o",
+        model: "openai/gpt-5.4",
         system_prompt: "You are a helpful expert.",
-        temperature: 0.3
+        temperature: 0.3,
+        use_thinking: false,
+        thinking_budget: 16000,
+        reasoning_effort: "medium",
+        use_web_search: false
     };
 }
 
@@ -48,7 +52,11 @@ function createPayload(config) {
         question: config.question,
         agents: config.agents.map((agent) => ({
             ...agent,
-            temperature: Number(agent.temperature)
+            temperature: Number(agent.temperature),
+            use_thinking: Boolean(agent.use_thinking),
+            thinking_budget: Number(agent.thinking_budget || 16000),
+            reasoning_effort: agent.reasoning_effort || "medium",
+            use_web_search: Boolean(agent.use_web_search)
         })),
         max_rounds: Number(config.maxRounds),
         consensus_threshold: Number(config.consensusThreshold),
@@ -278,8 +286,8 @@ export default function App() {
                                         type="button"
                                         onClick={() => applyPreset(preset.id)}
                                         className={`rounded-2xl border p-4 text-left transition ${selectedPresetId === preset.id
-                                                ? "border-cyan-400/50 bg-cyan-400/10"
-                                                : "border-white/10 bg-white/5 hover:bg-white/10"
+                                            ? "border-cyan-400/50 bg-cyan-400/10"
+                                            : "border-white/10 bg-white/5 hover:bg-white/10"
                                             }`}
                                     >
                                         <div className="mb-2 flex items-center justify-between gap-3">
@@ -794,6 +802,52 @@ function AgentEditor({ agent, index, canRemove, onChange, onRemove }) {
                     step="0.01"
                 />
             </div>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <div className="flex items-center gap-3">
+                    <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-white/10 bg-white/5 text-cyan-500"
+                        checked={agent.use_thinking || false}
+                        onChange={(e) => onChange(index, "use_thinking", e.target.checked)}
+                    />
+                    <label className="text-sm text-slate-300">Use Extended Thinking</label>
+                </div>
+                <div className="flex items-center gap-3">
+                    <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-white/10 bg-white/5 text-cyan-500"
+                        checked={agent.use_web_search || false}
+                        onChange={(e) => onChange(index, "use_web_search", e.target.checked)}
+                    />
+                    <label className="text-sm text-slate-300">Enable Web Search</label>
+                </div>
+            </div>
+
+            {agent.use_thinking && (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                    <Field
+                        label="Thinking Budget (tokens)"
+                        value={agent.thinking_budget || 16000}
+                        onChange={(v) => onChange(index, "thinking_budget", Number(v))}
+                        type="number"
+                        min="1024"
+                        step="1024"
+                    />
+                    <div>
+                        <label className="mb-2 block text-sm text-slate-300">Reasoning Effort (low/medium/high)</label>
+                        <select
+                            className="input-surface"
+                            value={agent.reasoning_effort || "medium"}
+                            onChange={(e) => onChange(index, "reasoning_effort", e.target.value)}
+                        >
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                </div>
+            )}
 
             <div className="mt-4">
                 <label className="mb-2 block text-sm text-slate-300">Model</label>

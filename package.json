@@ -1,0 +1,13 @@
+{
+    "name": "agentic-debate-ui",
+    "private": true,
+    "version": "1.0.0",
+    "scripts": {
+        "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+        "dev:frontend": "cd frontend && npm run dev",
+        "dev:backend": "cd backend && uv run uvicorn api:app --reload --port 8001"
+    },
+    "devDependencies": {
+        "concurrently": "^9.1.0"
+    }
+}

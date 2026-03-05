@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: backend
+Version: 0.1.0
+Summary: FastAPI backend for Agentic Debate UI
+Requires-Python: >=3.9
+Requires-Dist: fastapi
+Requires-Dist: openai
+Requires-Dist: anthropic
+Requires-Dist: google-genai
+Requires-Dist: pydantic
+Requires-Dist: python-dotenv
+Requires-Dist: uvicorn

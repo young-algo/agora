@@ -7,7 +7,10 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from litellm import acompletion
+import anthropic
+import openai
+from google import genai
+from google.genai import types
 
 
 @dataclass
@@ -20,6 +23,10 @@ class AgentConfig:
         "If another agent has a better answer, acknowledge it."
     )
     temperature: float = 0.3
+    use_thinking: bool = False
+    thinking_budget: int = 16000
+    reasoning_effort: str = "medium"
+    use_web_search: bool = False
 
 
 @dataclass
@@ -176,16 +183,95 @@ Task:
 5. Set changed_mind to true if your answer materially changed.
 """
 
-        response = await acompletion(
-            model=self.config.model,
-            messages=[
-                {"role": "system", "content": base_system},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=self.config.temperature,
-        )
+        provider = self.config.model.split("/")[0] if "/" in self.config.model else "openai"
+        model_name = self.config.model.split("/", 1)[1] if "/" in self.config.model else self.config.model
 
-        raw = response.choices[0].message.content
+        raw = None
+        if provider == "anthropic":
+            client = anthropic.AsyncAnthropic()
+            kwargs = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "system": base_system,
+                "temperature": self.config.temperature,
+                "max_tokens": 8192,
+            }
+            if getattr(self.config, "use_thinking", False):
+                kwargs["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": getattr(self.config, "thinking_budget", 16000)
+                }
+                kwargs["temperature"] = 1.0
+            if getattr(self.config, "use_web_search", False):
+                kwargs["tools"] = [{
+                    "name": "web_search",
+                    "type": "web_search_20250305",
+                    "user_location": {"type": "approximate", "timezone": "America/New_York"}
+                }]
+            response = await client.messages.create(**kwargs)
+            # Find the text block since reasoning block might exist
+            text_blocks = [b.text for b in response.content if getattr(b, "type", "") == "text"]
+            raw = text_blocks[0] if text_blocks else str(response.content)
+
+        elif provider == "openai":
+            client = openai.AsyncOpenAI()
+            if "gpt-5" in model_name:
+                kwargs = {
+                    "model": model_name,
+                    "input": [
+                        {"role": "system", "content": base_system},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "text": {"format": {"type": "text"}, "verbosity": "medium"}
+                }
+                if getattr(self.config, "use_thinking", False):
+                    kwargs["reasoning"] = {
+                        "effort": getattr(self.config, "reasoning_effort", "medium")
+                    }
+                if getattr(self.config, "use_web_search", False):
+                    kwargs["tools"] = [{
+                        "type": "web_search",
+                        "user_location": {"type": "approximate", "timezone": "America/New_York"},
+                        "search_context_size": "medium"
+                    }]
+                response = await client.responses.create(**kwargs)
+                # In new API, raw text sits either in outputs or text
+                try:
+                    raw = response.output[0].message.content
+                except Exception:
+                    raw = str(response)
+            else:
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": base_system},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=self.config.temperature,
+                )
+                raw = response.choices[0].message.content
+
+        elif provider == "gemini":
+            client = genai.Client()
+            config = types.GenerateContentConfig(
+                system_instruction=base_system,
+                temperature=self.config.temperature,
+            )
+            if getattr(self.config, "use_thinking", False):
+                config.thinking_config = types.ThinkingConfig(
+                    thinking_budget_tokens=getattr(self.config, "thinking_budget", 16000)
+                )
+            if getattr(self.config, "use_web_search", False):
+                config.tools = [{"google_search": {}}]
+            
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=user_prompt,
+                config=config
+            )
+            raw = response.text
+        else:
+            raise ValueError(f"Provider {provider} not supported.")
         if not isinstance(raw, str):
             raw = json.dumps(raw, ensure_ascii=False)
 
@@ -397,20 +483,15 @@ class DebateOrchestrator:
             return winner_turn.answer
 
         transcript_text = self._format_history(history)
+        
+        provider = self.synthesizer_model.split("/")[0] if "/" in self.synthesizer_model else "openai"
+        model_name = self.synthesizer_model.split("/", 1)[1] if "/" in self.synthesizer_model else self.synthesizer_model
 
-        response = await acompletion(
-            model=self.synthesizer_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a neutral moderator. Synthesize the best final answer from the debate. "
-                        "Prefer the converged position if convergence occurred, but preserve important caveats."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"""\
+        system_prompt = (
+            "You are a neutral moderator. Synthesize the best final answer from the debate. "
+            "Prefer the converged position if convergence occurred, but preserve important caveats."
+        )
+        user_prompt = f"""\
 Question:
 {question}
 
@@ -425,13 +506,58 @@ Write:
 1. Final answer
 2. Why this answer won
 3. Key caveats or assumptions
-""",
-                },
-            ],
-            temperature=self.synthesizer_temperature,
-        )
+"""
 
-        content = response.choices[0].message.content
+        if provider == "anthropic":
+            client = anthropic.AsyncAnthropic()
+            response = await client.messages.create(
+                model=model_name,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                temperature=self.synthesizer_temperature,
+                max_tokens=8192,
+            )
+            content = response.content[0].text if response.content else ""
+        elif provider == "openai":
+            client = openai.AsyncOpenAI()
+            if "gpt-5" in model_name:
+                response = await client.responses.create(
+                    model=model_name,
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    text={"format": {"type": "text"}, "verbosity": "medium"}
+                )
+                try:
+                    content = response.output[0].message.content
+                except Exception:
+                    content = str(response)
+            else:
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=self.synthesizer_temperature,
+                )
+                content = response.choices[0].message.content
+        elif provider == "gemini":
+            client = genai.Client()
+            config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=self.synthesizer_temperature,
+            )
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=user_prompt,
+                config=config
+            )
+            content = response.text
+        else:
+            raise ValueError(f"Provider {provider} not supported.")
+
         return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
 
     @staticmethod

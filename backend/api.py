@@ -17,7 +17,7 @@ app = FastAPI(title="Multi-Agent Debate API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten in production
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -28,6 +28,10 @@ class AgentSpec(BaseModel):
     model: str
     system_prompt: str = "You are a helpful expert."
     temperature: float = 0.3
+    use_thinking: bool = False
+    thinking_budget: int = 16000
+    reasoning_effort: str = "medium"
+    use_web_search: bool = False
 
 
 class DebateRequest(BaseModel):
