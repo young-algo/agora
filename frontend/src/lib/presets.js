@@ -13,26 +13,26 @@ export const BUILTIN_PRESETS = [
             maxRounds: 4,
             consensusThreshold: 0.67,
             stableRounds: 2,
-            synthesizerModel: "openai/gpt-4o",
+            synthesizerModel: "openai/gpt-5.4",
             synthesizerTemperature: 0.2,
             agents: [
                 {
                     name: "staff-architect",
-                    model: "openai/gpt-4o",
+                    model: "openai/gpt-5.4",
                     system_prompt:
                         "You are a senior staff engineer focused on correctness, design quality, maintainability, and tests.",
                     temperature: 0.2
                 },
                 {
                     name: "security-reviewer",
-                    model: "anthropic/claude-3-5-sonnet-20240620",
+                    model: "anthropic/claude-sonnet-4-6",
                     system_prompt:
                         "You are a security reviewer focused on auth, data leakage, injection, unsafe defaults, and abuse cases.",
                     temperature: 0.2
                 },
                 {
                     name: "performance-reviewer",
-                    model: "gemini/gemini-1.5-pro",
+                    model: "gemini/gemini-3.1-pro-preview",
                     system_prompt:
                         "You are a performance and reliability reviewer focused on latency, scaling, concurrency, observability, and operational simplicity.",
                     temperature: 0.2
@@ -52,26 +52,26 @@ export const BUILTIN_PRESETS = [
             maxRounds: 5,
             consensusThreshold: 0.67,
             stableRounds: 2,
-            synthesizerModel: "anthropic/claude-3-5-sonnet-20240620",
+            synthesizerModel: "anthropic/claude-sonnet-4-6",
             synthesizerTemperature: 0.2,
             agents: [
                 {
                     name: "quant-researcher",
-                    model: "anthropic/claude-3-5-sonnet-20240620",
+                    model: "anthropic/claude-sonnet-4-6",
                     system_prompt:
                         "You are a quantitative researcher focused on signal validity, backtest quality, and regime dependence.",
                     temperature: 0.2
                 },
                 {
                     name: "risk-manager",
-                    model: "openai/gpt-4o",
+                    model: "openai/gpt-5.4",
                     system_prompt:
                         "You are a risk manager focused on drawdowns, correlation risk, tail events, position sizing, and failure modes.",
                     temperature: 0.2
                 },
                 {
                     name: "execution-engineer",
-                    model: "gemini/gemini-1.5-pro",
+                    model: "gemini/gemini-3.1-pro-preview",
                     system_prompt:
                         "You are an execution engineer focused on slippage, liquidity, latency, implementation complexity, and monitoring.",
                     temperature: 0.2

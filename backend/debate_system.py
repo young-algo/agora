@@ -235,11 +235,18 @@ Task:
                         "search_context_size": "medium"
                     }]
                 response = await client.responses.create(**kwargs)
-                # In new API, raw text sits either in outputs or text
-                try:
-                    raw = response.output[0].message.content
-                except Exception:
-                    raw = str(response)
+                # In new API, raw text sits inside output content parts
+                raw_extracted = None
+                if hasattr(response, "output"):
+                    for item in response.output:
+                        if type(item).__name__ == "ResponseOutputMessage" and hasattr(item, "content"):
+                            for block in item.content:
+                                if type(block).__name__ == "ResponseOutputText" and hasattr(block, "text"):
+                                    raw_extracted = block.text
+                                    break
+                            if raw_extracted:
+                                break
+                raw = raw_extracted if raw_extracted else str(response)
             else:
                 response = await client.chat.completions.create(
                     model=model_name,
@@ -252,21 +259,37 @@ Task:
                 raw = response.choices[0].message.content
 
         elif provider == "gemini":
-            client = genai.Client()
+            import os
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            client = genai.Client(api_key=api_key)
             config = types.GenerateContentConfig(
                 system_instruction=base_system,
                 temperature=self.config.temperature,
             )
             if getattr(self.config, "use_thinking", False):
-                config.thinking_config = types.ThinkingConfig(
-                    thinking_budget_tokens=getattr(self.config, "thinking_budget", 16000)
-                )
+                if model_name == "gemini-3.1-flash-lite-preview":
+                    config.thinking_config = types.ThinkingConfig(
+                        thinking_level="MINIMAL",
+                    )
+                else:
+                    config.thinking_config = types.ThinkingConfig(
+                        thinking_budget_tokens=getattr(self.config, "thinking_budget", 16000),
+                    )
             if getattr(self.config, "use_web_search", False):
                 config.tools = [{"google_search": {}}]
             
+            gemini_contents = [
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(text=user_prompt),
+                    ],
+                ),
+            ]
+
             response = await client.aio.models.generate_content(
                 model=model_name,
-                contents=user_prompt,
+                contents=gemini_contents,
                 config=config
             )
             raw = response.text
@@ -529,10 +552,17 @@ Write:
                     ],
                     text={"format": {"type": "text"}, "verbosity": "medium"}
                 )
-                try:
-                    content = response.output[0].message.content
-                except Exception:
-                    content = str(response)
+                content_extracted = None
+                if hasattr(response, "output"):
+                    for item in response.output:
+                        if type(item).__name__ == "ResponseOutputMessage" and hasattr(item, "content"):
+                            for block in item.content:
+                                if type(block).__name__ == "ResponseOutputText" and hasattr(block, "text"):
+                                    content_extracted = block.text
+                                    break
+                            if content_extracted:
+                                break
+                content = content_extracted if content_extracted else str(response)
             else:
                 response = await client.chat.completions.create(
                     model=model_name,
@@ -544,14 +574,24 @@ Write:
                 )
                 content = response.choices[0].message.content
         elif provider == "gemini":
-            client = genai.Client()
+            import os
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            client = genai.Client(api_key=api_key)
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=self.synthesizer_temperature,
             )
+            gemini_contents = [
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(text=user_prompt),
+                    ],
+                ),
+            ]
             response = await client.aio.models.generate_content(
                 model=model_name,
-                contents=user_prompt,
+                contents=gemini_contents,
                 config=config
             )
             content = response.text

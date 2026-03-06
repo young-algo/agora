@@ -1,46 +1,454 @@
+@import url("https://api.fontshare.com/v2/css?f[]=overused-grotesk@500,600,700&f[]=switzer@400,500,600,700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  color-scheme: dark;
+  --bg-0: #060d1d;
+  --bg-1: #0a1428;
+  --bg-glow-1: rgba(67, 175, 203, 0.18);
+  --bg-glow-2: rgba(44, 97, 174, 0.22);
+  --bg-glow-3: rgba(36, 58, 103, 0.28);
+  --text-main: #e7eefc;
+  --text-strong: #ffffff;
+  --text-muted: #9aa8c7;
+  --surface-1: rgba(11, 20, 39, 0.82);
+  --surface-2: rgba(9, 17, 33, 0.7);
+  --surface-3: rgba(6, 12, 25, 0.6);
+  --border-soft: rgba(154, 168, 199, 0.22);
+  --border-strong: rgba(154, 168, 199, 0.16);
+  --accent: #41c7da;
+  --accent-soft: #82dfec;
+  --accent-strong: #66d3e2;
+  --accent-text: #071123;
+  --focus-ring: rgba(65, 199, 218, 0.38);
+  --badge-bg: rgba(255, 255, 255, 0.05);
+  --badge-border: rgba(154, 168, 199, 0.26);
+  --badge-text: #dbe4f7;
+  --toggle-bg: rgba(255, 255, 255, 0.05);
+  --toggle-border: rgba(154, 168, 199, 0.22);
+  --toggle-chip-text: #cdd8ef;
+  --toggle-chip-hover: rgba(255, 255, 255, 0.08);
+  --toggle-chip-active-bg: rgba(255, 255, 255, 0.15);
+  --toggle-chip-active-text: #ffffff;
+  --danger-border: rgba(244, 114, 182, 0.32);
+  --danger-bg: rgba(244, 114, 182, 0.14);
+  --danger-bg-hover: rgba(244, 114, 182, 0.24);
+  --danger-text: #ffe4ef;
+  --panel-shadow: 0 14px 50px rgba(0, 0, 0, 0.35);
+  --strip-shadow: 0 10px 36px rgba(0, 0, 0, 0.4);
+  --status-idle-bg: rgba(255, 255, 255, 0.05);
+  --status-idle-border: rgba(154, 168, 199, 0.18);
+  --status-idle-text: #dbe4f7;
+  --status-connecting-bg: rgba(245, 158, 11, 0.12);
+  --status-connecting-border: rgba(253, 186, 116, 0.24);
+  --status-connecting-text: #fde7c2;
+  --status-running-bg: rgba(65, 199, 218, 0.14);
+  --status-running-border: rgba(65, 199, 218, 0.24);
+  --status-running-text: #dcf9ff;
+  --status-done-bg: rgba(16, 185, 129, 0.14);
+  --status-done-border: rgba(110, 231, 183, 0.24);
+  --status-done-text: #d9fff2;
+  --status-error-bg: rgba(232, 90, 79, 0.18);
+  --status-error-border: rgba(232, 90, 79, 0.28);
+  --status-error-text: #ffe2df;
+  --status-aborted-bg: rgba(148, 163, 184, 0.12);
+  --status-aborted-border: rgba(148, 163, 184, 0.2);
+  --status-aborted-text: #dbe4f7;
+  --panel-pad: 1.25rem;
+  --control-y: 0.72rem;
+  --control-x: 0.9rem;
+}
+
+body.theme-light {
+  color-scheme: light;
+  --bg-0: #eae7dc;
+  --bg-1: #f4efe5;
+  --bg-glow-1: rgba(233, 128, 116, 0.18);
+  --bg-glow-2: rgba(216, 195, 165, 0.38);
+  --bg-glow-3: rgba(142, 141, 138, 0.14);
+  --text-main: #4d463d;
+  --text-strong: #3c362f;
+  --text-muted: #7f776d;
+  --surface-1: rgba(255, 251, 245, 0.78);
+  --surface-2: rgba(250, 244, 235, 0.8);
+  --surface-3: rgba(249, 243, 234, 0.92);
+  --border-soft: rgba(142, 141, 138, 0.26);
+  --border-strong: rgba(142, 141, 138, 0.18);
+  --accent: #e85a4f;
+  --accent-soft: #e98074;
+  --accent-strong: #d8574d;
+  --accent-text: #fff7f5;
+  --focus-ring: rgba(232, 90, 79, 0.2);
+  --badge-bg: rgba(216, 195, 165, 0.16);
+  --badge-border: rgba(142, 141, 138, 0.24);
+  --badge-text: #5d554c;
+  --toggle-bg: rgba(255, 251, 245, 0.86);
+  --toggle-border: rgba(142, 141, 138, 0.24);
+  --toggle-chip-text: #7f776d;
+  --toggle-chip-hover: rgba(216, 195, 165, 0.18);
+  --toggle-chip-active-bg: rgba(232, 128, 116, 0.16);
+  --toggle-chip-active-text: #8f433d;
+  --danger-border: rgba(232, 128, 116, 0.28);
+  --danger-bg: rgba(232, 128, 116, 0.12);
+  --danger-bg-hover: rgba(232, 128, 116, 0.22);
+  --danger-text: #a3544c;
+  --panel-shadow: 0 18px 48px rgba(97, 81, 68, 0.12);
+  --strip-shadow: 0 10px 30px rgba(97, 81, 68, 0.12);
+  --status-idle-bg: rgba(142, 141, 138, 0.08);
+  --status-idle-border: rgba(142, 141, 138, 0.18);
+  --status-idle-text: #655d54;
+  --status-connecting-bg: rgba(216, 195, 165, 0.2);
+  --status-connecting-border: rgba(216, 195, 165, 0.36);
+  --status-connecting-text: #7a6450;
+  --status-running-bg: rgba(232, 128, 116, 0.16);
+  --status-running-border: rgba(232, 128, 116, 0.26);
+  --status-running-text: #8f433d;
+  --status-done-bg: rgba(232, 90, 79, 0.12);
+  --status-done-border: rgba(232, 90, 79, 0.22);
+  --status-done-text: #964840;
+  --status-error-bg: rgba(232, 90, 79, 0.18);
+  --status-error-border: rgba(232, 90, 79, 0.28);
+  --status-error-text: #8d3f39;
+  --status-aborted-bg: rgba(142, 141, 138, 0.12);
+  --status-aborted-border: rgba(142, 141, 138, 0.2);
+  --status-aborted-text: #6b6359;
+}
+
+.density-compact {
+  --panel-pad: 0.95rem;
+  --control-y: 0.55rem;
+  --control-x: 0.78rem;
+}
+
+.density-comfortable {
+  --panel-pad: 1.25rem;
+  --control-y: 0.72rem;
+  --control-x: 0.9rem;
+}
+
 html,
 body,
 #root {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  margin: 0;
+  color: var(--text-main);
+  font-family: "Switzer", sans-serif;
+  background-color: var(--bg-0);
   background-image:
-    radial-gradient(circle at top, rgba(34, 211, 238, 0.12), transparent 28%),
-    radial-gradient(circle at bottom left, rgba(168, 85, 247, 0.10), transparent 24%);
+    radial-gradient(circle at 10% 8%, var(--bg-glow-1), transparent 35%),
+    radial-gradient(circle at 85% 0%, var(--bg-glow-2), transparent 34%),
+    radial-gradient(circle at 20% 95%, var(--bg-glow-3), transparent 32%);
 }
 
 ::selection {
-  @apply bg-cyan-400/30 text-white;
+  background: var(--focus-ring);
+  color: var(--text-strong);
 }
 
 @layer components {
+  .app-shell {
+    @apply min-h-screen relative;
+  }
+
+  .logo-text {
+    @apply text-5xl font-semibold tracking-tight text-transparent bg-clip-text;
+    font-family: "Overused Grotesk", sans-serif;
+    background-image: linear-gradient(110deg, var(--accent-soft), var(--accent));
+  }
+
   .glass-panel {
-    @apply rounded-3xl border border-white/10 bg-white/5 shadow-glow backdrop-blur-xl;
+    @apply rounded-3xl border backdrop-blur-xl;
+    border-color: var(--border-soft);
+    background: var(--surface-1);
+    padding: var(--panel-pad);
+    box-shadow: var(--panel-shadow);
+  }
+
+  .panel-muted {
+    @apply rounded-2xl border;
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+    padding: calc(var(--panel-pad) * 0.72);
   }
 
   .input-surface {
-    @apply w-full rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20;
+    @apply w-full rounded-xl border text-sm outline-none transition;
+    border-color: var(--border-soft);
+    background: var(--surface-3);
+    color: var(--text-main);
+    padding: var(--control-y) var(--control-x);
+  }
+
+  .input-surface::placeholder {
+    color: var(--text-muted);
+  }
+
+  .input-surface:focus {
+    border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
 
   .btn-primary {
-    @apply inline-flex items-center gap-2 rounded-2xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center gap-2 rounded-xl text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+    background: var(--accent);
+    color: var(--accent-text);
+    padding: var(--control-y) var(--control-x);
+  }
+
+  .btn-primary:hover {
+    background: var(--accent-strong);
   }
 
   .btn-secondary {
-    @apply inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center gap-2 rounded-xl border text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+    border-color: var(--border-soft);
+    background: var(--toggle-bg);
+    color: var(--text-main);
+    padding: var(--control-y) var(--control-x);
+  }
+
+  .btn-secondary:hover {
+    background: var(--toggle-chip-hover);
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center rounded-xl border text-sm transition;
+    border-color: var(--danger-border);
+    background: var(--danger-bg);
+    color: var(--danger-text);
+    padding: calc(var(--control-y) * 0.8) calc(var(--control-x) * 0.9);
+  }
+
+  .btn-danger:hover {
+    background: var(--danger-bg-hover);
   }
 
   .badge-soft {
-    @apply inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-slate-200;
+    @apply inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium;
+    border-color: var(--badge-border);
+    background: var(--badge-bg);
+    color: var(--badge-text);
   }
 
   .section-title {
-    @apply text-sm font-semibold uppercase tracking-[0.18em] text-slate-400;
+    @apply text-sm font-semibold tracking-[0.12em];
+    color: var(--text-muted);
   }
+
+  .action-strip {
+    @apply rounded-3xl border backdrop-blur-xl;
+    border-color: var(--border-soft);
+    background: var(--surface-1);
+    padding: calc(var(--panel-pad) * 0.8);
+    box-shadow: var(--strip-shadow);
+  }
+
+  .mobile-action-bar {
+    @apply fixed inset-x-0 bottom-0 z-40 border-t px-4 py-3 backdrop-blur;
+    border-color: var(--border-soft);
+    background: color-mix(in srgb, var(--surface-1) 96%, transparent);
+  }
+
+  .timeline-track {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .timeline-node {
+    @apply inline-flex h-8 min-w-8 items-center justify-center rounded-full border text-xs font-semibold;
+    border-color: color-mix(in srgb, var(--border-soft) 90%, transparent);
+    background: color-mix(in srgb, var(--badge-bg) 90%, transparent);
+    color: var(--text-muted);
+  }
+
+  .timeline-node.is-complete {
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--text-strong);
+  }
+
+  .timeline-node.is-active {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  .agent-card {
+    @apply rounded-2xl border p-4;
+    border-color: var(--border-strong);
+    background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  }
+
+  .agent-summary {
+    @apply min-w-0 flex-1 text-left;
+  }
+
+  .empty-state {
+    @apply rounded-2xl border border-dashed p-8 text-center;
+    border-color: color-mix(in srgb, var(--border-soft) 96%, transparent);
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  }
+
+  .toggle-group {
+    @apply inline-flex items-center gap-1 rounded-xl border p-1;
+    border-color: var(--toggle-border);
+    background: var(--toggle-bg);
+  }
+
+  .toggle-chip {
+    @apply rounded-lg px-3 py-1.5 text-xs font-semibold transition;
+    color: var(--toggle-chip-text);
+  }
+
+  .toggle-chip:hover {
+    background: var(--toggle-chip-hover);
+  }
+
+  .toggle-chip.is-active {
+    background: var(--toggle-chip-active-bg);
+    color: var(--toggle-chip-active-text);
+  }
+
+  .status-badge {
+    border-color: var(--status-idle-border);
+    background: var(--status-idle-bg);
+    color: var(--status-idle-text);
+  }
+
+  .status-connecting {
+    border-color: var(--status-connecting-border);
+    background: var(--status-connecting-bg);
+    color: var(--status-connecting-text);
+  }
+
+  .status-running {
+    border-color: var(--status-running-border);
+    background: var(--status-running-bg);
+    color: var(--status-running-text);
+  }
+
+  .status-done {
+    border-color: var(--status-done-border);
+    background: var(--status-done-bg);
+    color: var(--status-done-text);
+  }
+
+  .status-error {
+    border-color: var(--status-error-border);
+    background: var(--status-error-bg);
+    color: var(--status-error-text);
+  }
+
+  .status-aborted {
+    border-color: var(--status-aborted-border);
+    background: var(--status-aborted-bg);
+    color: var(--status-aborted-text);
+  }
+}
+
+.theme-light .text-white {
+  color: var(--text-strong);
+}
+
+.theme-light .text-slate-100,
+.theme-light .text-slate-200 {
+  color: #5b5248;
+}
+
+.theme-light .text-slate-300 {
+  color: #74695d;
+}
+
+.theme-light .text-slate-400 {
+  color: var(--text-muted);
+}
+
+.theme-light .text-slate-500 {
+  color: #989087;
+}
+
+.theme-light .text-cyan-100,
+.theme-light .text-cyan-200,
+.theme-light .text-cyan-500 {
+  color: var(--accent);
+}
+
+.theme-light .bg-white\/5 {
+  background-color: rgba(255, 251, 245, 0.52);
+}
+
+.theme-light .bg-white\/10 {
+  background-color: rgba(255, 251, 245, 0.72);
+}
+
+.theme-light .bg-white\/15 {
+  background-color: rgba(216, 195, 165, 0.36);
+}
+
+.theme-light .hover\:bg-white\/10:hover {
+  background-color: rgba(216, 195, 165, 0.24);
+}
+
+.theme-light .bg-slate-800 {
+  background-color: rgba(142, 141, 138, 0.16);
+}
+
+.theme-light .bg-slate-900\/60 {
+  background-color: rgba(255, 251, 245, 0.82);
+}
+
+.theme-light .bg-slate-950\/70 {
+  background-color: rgba(248, 241, 232, 0.94);
+}
+
+.theme-light .border-white\/10 {
+  border-color: rgba(142, 141, 138, 0.22);
+}
+
+.theme-light .border-cyan-400\/20 {
+  border-color: rgba(232, 90, 79, 0.22);
+}
+
+.theme-light .border-cyan-400\/50 {
+  border-color: rgba(232, 90, 79, 0.5);
+}
+
+.theme-light .bg-cyan-400\/6 {
+  background-color: rgba(232, 90, 79, 0.07);
+}
+
+.theme-light .bg-cyan-400\/10 {
+  background-color: rgba(232, 90, 79, 0.12);
+}
+
+.theme-light .border-amber-400\/20 {
+  border-color: rgba(216, 195, 165, 0.5);
+}
+
+.theme-light .bg-amber-400\/10 {
+  background-color: rgba(216, 195, 165, 0.18);
+}
+
+.theme-light .text-amber-100 {
+  color: #7a6450;
+}
+
+.theme-light .border-rose-400\/20 {
+  border-color: rgba(232, 128, 116, 0.3);
+}
+
+.theme-light .bg-rose-400\/10 {
+  background-color: rgba(232, 128, 116, 0.14);
+}
+
+.theme-light .hover\:bg-rose-400\/20:hover {
+  background-color: rgba(232, 128, 116, 0.22);
+}
+
+.theme-light .text-rose-100,
+.theme-light .text-rose-200 {
+  color: #9b534c;
 }

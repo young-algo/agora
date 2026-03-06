@@ -8,11 +8,6 @@ export const MODEL_GROUPS = [
                 note: "Best all-around OpenAI choice"
             },
             {
-                value: "openai/gpt-5.3",
-                label: "GPT-5.3",
-                note: "Strong reasoning and long context"
-            },
-            {
                 value: "openai/gpt-5-mini",
                 label: "GPT-5 Mini",
                 note: "Stable legacy option"
@@ -43,14 +38,19 @@ export const MODEL_GROUPS = [
         provider: "Gemini",
         models: [
             {
-                value: "gemini/gemini-3.1-pro",
+                value: "gemini/gemini-3.1-pro-preview",
                 label: "Gemini 3.1 Pro",
                 note: "Strong long-context and synthesis"
             },
             {
-                value: "gemini/gemini-3.1-flash",
-                label: "Gemini 3.1 Flash",
+                value: "gemini/gemini-3-flash-preview",
+                label: "Gemini 3 Flash",
                 note: "Fast and cost-efficient"
+            },
+            {
+                value: "gemini/gemini-3.1-flash-lite-preview",
+                label: "Gemini 3.1 Flash Lite",
+                note: "Minimal thinking, super fast"
             }
         ]
     }

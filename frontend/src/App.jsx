@@ -3,6 +3,8 @@ import {
     Activity,
     Bot,
     Brain,
+    ChevronDown,
+    ChevronRight,
     Loader2,
     Play,
     Plus,
@@ -22,6 +24,8 @@ import {
 } from "./lib/presets";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8001";
+const DENSITY_STORAGE_KEY = "debate-ui-density-v1";
+const APPEARANCE_STORAGE_KEY = "debate-ui-appearance-v1";
 
 const EMPTY_RUN_STATE = {
     status: "idle",
@@ -66,12 +70,40 @@ function createPayload(config) {
     };
 }
 
+function loadDensityPreference() {
+    try {
+        if (typeof window === "undefined") return "comfortable";
+        const saved = window.localStorage.getItem(DENSITY_STORAGE_KEY);
+        return saved === "compact" || saved === "comfortable" ? saved : "comfortable";
+    } catch {
+        return "comfortable";
+    }
+}
+
+function loadAppearancePreference() {
+    try {
+        if (typeof window === "undefined") return "dark";
+        const saved = window.localStorage.getItem(APPEARANCE_STORAGE_KEY);
+        return saved === "light" || saved === "dark" ? saved : "dark";
+    } catch {
+        return "dark";
+    }
+}
+
 export default function App() {
     const [config, setConfig] = useState(() => cloneConfig(BUILTIN_PRESETS[0].config));
     const [selectedPresetId, setSelectedPresetId] = useState(BUILTIN_PRESETS[0].id);
     const [savedPresets, setSavedPresets] = useState(() => loadSavedPresets());
     const [newPresetName, setNewPresetName] = useState("");
     const [runState, setRunState] = useState(EMPTY_RUN_STATE);
+    const [density, setDensity] = useState(loadDensityPreference);
+    const [appearance, setAppearance] = useState(loadAppearancePreference);
+    const [openSections, setOpenSections] = useState({
+        presets: true,
+        setup: true,
+        agents: true
+    });
+    const [openAgentIndex, setOpenAgentIndex] = useState(0);
 
     const abortRef = useRef(null);
 
@@ -103,6 +135,35 @@ export default function App() {
         return () => abortRef.current?.abort();
     }, []);
 
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(DENSITY_STORAGE_KEY, density);
+        } catch {
+            // no-op
+        }
+    }, [density]);
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(APPEARANCE_STORAGE_KEY, appearance);
+        } catch {
+            // no-op
+        }
+    }, [appearance]);
+
+    useEffect(() => {
+        document.body.classList.toggle("theme-light", appearance === "light");
+        return () => {
+            document.body.classList.remove("theme-light");
+        };
+    }, [appearance]);
+
+    useEffect(() => {
+        if (openAgentIndex > config.agents.length - 1) {
+            setOpenAgentIndex(Math.max(0, config.agents.length - 1));
+        }
+    }, [config.agents.length, openAgentIndex]);
+
     function patchConfig(key, value) {
         setConfig((prev) => ({ ...prev, [key]: value }));
     }
@@ -117,10 +178,14 @@ export default function App() {
     }
 
     function addAgent() {
-        setConfig((prev) => ({
-            ...prev,
-            agents: [...prev.agents, makeAgent(prev.agents.length + 1)]
-        }));
+        setConfig((prev) => {
+            const nextIndex = prev.agents.length;
+            setOpenAgentIndex(nextIndex);
+            return {
+                ...prev,
+                agents: [...prev.agents, makeAgent(prev.agents.length + 1)]
+            };
+        });
     }
 
     function removeAgent(index) {
@@ -131,6 +196,12 @@ export default function App() {
                 agents: prev.agents.filter((_, i) => i !== index)
             };
         });
+
+        setOpenAgentIndex((currentOpen) => {
+            if (currentOpen === index) return Math.max(0, index - 1);
+            if (currentOpen > index) return currentOpen - 1;
+            return currentOpen;
+        });
     }
 
     function applyPreset(id) {
@@ -139,6 +210,7 @@ export default function App() {
         setSelectedPresetId(id);
         setConfig(cloneConfig(preset.config));
         setRunState(EMPTY_RUN_STATE);
+        setOpenAgentIndex(0);
     }
 
     function handleSavePreset() {
@@ -155,6 +227,7 @@ export default function App() {
         if (selectedPresetId === id) {
             setSelectedPresetId(BUILTIN_PRESETS[0].id);
             setConfig(cloneConfig(BUILTIN_PRESETS[0].config));
+            setOpenAgentIndex(0);
         }
     }
 
@@ -251,33 +324,52 @@ export default function App() {
         abortRef.current?.abort();
     }
 
+    function toggleSection(sectionKey) {
+        setOpenSections((prev) => ({
+            ...prev,
+            [sectionKey]: !prev[sectionKey]
+        }));
+    }
+
+    const timelineRound = runState.finalResult?.rounds_run || runState.currentRound || 0;
+
     return (
-        <div className="min-h-screen">
-            <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-                <header className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div
+            className={`app-shell theme-${appearance} ${density === "compact" ? "density-compact" : "density-comfortable"}`}
+        >
+            <MobileActionBar
+                canRun={canRun}
+                currentPreset={currentPreset}
+                isRunning={isRunning}
+                onRun={handleRun}
+                onStop={handleStop}
+                status={runState.status}
+            />
+
+            <div className="mx-auto max-w-[1500px] px-4 pb-28 pt-6 sm:px-6 lg:px-8 lg:pb-10">
+                <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div className="space-y-3">
+                        <h1 className="logo-text">Agora</h1>
                         <div className="section-title">Agentic LLM Debate Workbench</div>
-                        <h1 className="text-4xl font-semibold tracking-tight text-white">
-                            Multi-agent debate UI
-                        </h1>
                         <p className="max-w-3xl text-slate-300">
-                            Mix models across OpenAI, Anthropic, and Gemini, stream each round
-                            live, and save reusable presets for recurring workflows.
+                            Mix models across providers, stream each debate round live, and save
+                            reusable presets for recurring workflows.
                         </p>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
-                        <span className="badge-soft">Streaming rounds</span>
-                        <span className="badge-soft">Cross-model agents</span>
-                        <span className="badge-soft">Saved presets</span>
+                    <div className="flex items-center gap-2 whitespace-nowrap">
+                        <AppearanceToggle appearance={appearance} onChange={setAppearance} />
+                        <DensityToggle density={density} onChange={setDensity} />
                     </div>
                 </header>
 
                 <div className="grid gap-6 xl:grid-cols-[440px_minmax(0,1fr)]">
-                    <div className="space-y-6">
-                        <Panel
+                    <div className="order-2 space-y-6 xl:order-1">
+                        <CollapsiblePanel
                             title="Presets"
                             subtitle="Load built-ins or save your current setup to local storage."
+                            isOpen={openSections.presets}
+                            onToggle={() => toggleSection("presets")}
                         >
                             <div className="grid gap-3">
                                 {BUILTIN_PRESETS.map((preset) => (
@@ -379,11 +471,13 @@ export default function App() {
                                     </div>
                                 </div>
                             )}
-                        </Panel>
+                        </CollapsiblePanel>
 
-                        <Panel
+                        <CollapsiblePanel
                             title="Debate setup"
                             subtitle="Question, convergence settings, and final synthesizer."
+                            isOpen={openSections.setup}
+                            onToggle={() => toggleSection("setup")}
                         >
                             <label className="mb-2 block text-sm text-slate-300">Question</label>
                             <textarea
@@ -436,11 +530,13 @@ export default function App() {
                                     onChange={(value) => patchConfig("synthesizerModel", value)}
                                 />
                             </div>
-                        </Panel>
+                        </CollapsiblePanel>
 
-                        <Panel
+                        <CollapsiblePanel
                             title="Agents"
                             subtitle="Each agent can run on a different model and persona."
+                            isOpen={openSections.agents}
+                            onToggle={() => toggleSection("agents")}
                             action={
                                 <button type="button" className="btn-secondary" onClick={addAgent}>
                                     <Plus className="h-4 w-4" />
@@ -460,62 +556,59 @@ export default function App() {
                                         key={`${agent.name}-${index}`}
                                         agent={agent}
                                         index={index}
+                                        isOpen={openAgentIndex === index}
                                         canRemove={config.agents.length > 2}
+                                        onToggle={() => setOpenAgentIndex(index)}
                                         onChange={patchAgent}
                                         onRemove={removeAgent}
                                     />
                                 ))}
                             </div>
-                        </Panel>
+                        </CollapsiblePanel>
                     </div>
 
-                    <div className="space-y-6">
+                    <div className="order-1 space-y-6 xl:order-2">
+                        <div className="hidden xl:sticky xl:top-4 xl:z-30 xl:block">
+                            <ActionStrip
+                                canRun={canRun}
+                                currentPreset={currentPreset}
+                                isRunning={isRunning}
+                                onRun={handleRun}
+                                onStop={handleStop}
+                                status={runState.status}
+                                currentRound={runState.currentRound}
+                                maxRounds={config.maxRounds}
+                            />
+                        </div>
+
                         <Panel
                             title="Live monitor"
                             subtitle="Streamed round updates from the backend."
-                            action={
-                                <div className="flex flex-wrap gap-3">
-                                    <button
-                                        type="button"
-                                        className="btn-primary"
-                                        onClick={handleRun}
-                                        disabled={!canRun || isRunning}
-                                    >
-                                        {isRunning ? (
-                                            <Loader2 className="h-4 w-4 animate-spin" />
-                                        ) : (
-                                            <Play className="h-4 w-4" />
-                                        )}
-                                        {isRunning ? "Running..." : "Run debate"}
-                                    </button>
-
-                                    <button
-                                        type="button"
-                                        className="btn-secondary"
-                                        onClick={handleStop}
-                                        disabled={!isRunning}
-                                    >
-                                        <Square className="h-4 w-4" />
-                                        Stop
-                                    </button>
-                                </div>
-                            }
                         >
                             <div className="mb-5 flex flex-wrap items-center gap-2">
                                 <StatusBadge status={runState.status} />
                                 {currentPreset && <span className="badge-soft">{currentPreset.name}</span>}
                             </div>
 
+                            <div className="mb-5">
+                                <div className="mb-2 text-sm text-slate-300">Round timeline</div>
+                                <RoundTimeline
+                                    currentRound={timelineRound}
+                                    maxRounds={Number(config.maxRounds)}
+                                    status={runState.status}
+                                />
+                            </div>
+
                             <div className="grid gap-4 sm:grid-cols-3">
                                 <Stat
                                     icon={<Activity className="h-4 w-4" />}
                                     label="Current round"
-                                    value={runState.currentRound || "—"}
+                                    value={runState.currentRound || "--"}
                                 />
                                 <Stat
                                     icon={<Brain className="h-4 w-4" />}
                                     label="Leader"
-                                    value={runState.leader || "—"}
+                                    value={runState.leader || "--"}
                                 />
                                 <Stat
                                     icon={<Bot className="h-4 w-4" />}
@@ -571,10 +664,15 @@ export default function App() {
                                     </div>
                                 </div>
                             ) : (
-                                <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/40 p-8 text-center text-slate-400">
-                                    <Sparkles className="mx-auto mb-3 h-6 w-6" />
-                                    Start a debate to see the final answer here.
-                                </div>
+                                <EmptyState
+                                    icon={<Sparkles className="h-5 w-5" />}
+                                    title={isRunning ? "Debate in progress" : "No final answer yet"}
+                                    text={
+                                        isRunning
+                                            ? "A synthesis appears after convergence or max rounds."
+                                            : "Run a debate to see the final answer here."
+                                    }
+                                />
                             )}
                         </Panel>
 
@@ -583,9 +681,14 @@ export default function App() {
                             subtitle="Live round-by-round debate as it streams in."
                         >
                             {runState.rounds.length === 0 ? (
-                                <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/40 p-8 text-center text-slate-400">
-                                    No rounds yet.
-                                </div>
+                                <EmptyState
+                                    title={isRunning ? "Waiting for round output" : "No rounds yet"}
+                                    text={
+                                        isRunning
+                                            ? "Round events will stream here as each round completes."
+                                            : "Run a debate to populate the transcript."
+                                    }
+                                />
                             ) : (
                                 <div className="space-y-4">
                                     {runState.rounds.map((round) => (
@@ -668,6 +771,186 @@ function parseSseChunk(chunk) {
     }
 }
 
+function DensityToggle({ density, onChange }) {
+    return (
+        <SegmentedToggle
+            value={density}
+            onChange={onChange}
+            options={[
+                { label: "Comfortable", value: "comfortable" },
+                { label: "Compact", value: "compact" }
+            ]}
+        />
+    );
+}
+
+function AppearanceToggle({ appearance, onChange }) {
+    return (
+        <SegmentedToggle
+            value={appearance}
+            onChange={onChange}
+            options={[
+                { label: "Default", value: "dark" },
+                { label: "Light", value: "light" }
+            ]}
+        />
+    );
+}
+
+function SegmentedToggle({ value, onChange, options }) {
+    return (
+        <div className="toggle-group">
+            {options.map((option) => (
+                <button
+                    key={option.value}
+                    type="button"
+                    className={`toggle-chip ${value === option.value ? "is-active" : ""}`}
+                    onClick={() => onChange(option.value)}
+                >
+                    {option.label}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+function ActionStrip({
+    canRun,
+    currentPreset,
+    isRunning,
+    onRun,
+    onStop,
+    status,
+    currentRound,
+    maxRounds
+}) {
+    return (
+        <div className="action-strip">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+                <StatusBadge status={status} />
+                {currentPreset && <span className="badge-soft">{currentPreset.name}</span>}
+                <span className="badge-soft">
+                    Round {currentRound || 0}/{Math.max(1, Number(maxRounds) || 1)}
+                </span>
+            </div>
+
+            <div className="flex gap-2">
+                <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={onRun}
+                    disabled={!canRun || isRunning}
+                >
+                    {isRunning ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                        <Play className="h-4 w-4" />
+                    )}
+                    {isRunning ? "Running..." : "Run debate"}
+                </button>
+
+                <button type="button" className="btn-secondary" onClick={onStop} disabled={!isRunning}>
+                    <Square className="h-4 w-4" />
+                    Stop
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function MobileActionBar({ canRun, currentPreset, isRunning, onRun, onStop, status }) {
+    return (
+        <div className="mobile-action-bar xl:hidden">
+            <div className="mx-auto flex max-w-3xl items-center justify-between gap-2">
+                <div className="min-w-0">
+                    <div className="mb-1 flex items-center gap-2">
+                        <StatusBadge status={status} />
+                    </div>
+                    <div className="truncate text-xs text-slate-400">
+                        {currentPreset ? currentPreset.name : "No preset"}
+                    </div>
+                </div>
+
+                <div className="flex shrink-0 gap-2">
+                    <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={onRun}
+                        disabled={!canRun || isRunning}
+                    >
+                        {isRunning ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                            <Play className="h-4 w-4" />
+                        )}
+                        Run
+                    </button>
+
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={onStop}
+                        disabled={!isRunning}
+                    >
+                        <Square className="h-4 w-4" />
+                        Stop
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function CollapsiblePanel({ title, subtitle, isOpen, onToggle, action, children }) {
+    return (
+        <section className="glass-panel p-5 sm:p-6">
+            <div className="mb-5 flex items-start gap-3">
+                <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                    onClick={onToggle}
+                >
+                    {isOpen ? (
+                        <ChevronDown className="mt-0.5 h-4 w-4 text-slate-300" />
+                    ) : (
+                        <ChevronRight className="mt-0.5 h-4 w-4 text-slate-300" />
+                    )}
+                    <span className="min-w-0">
+                        <span className="block text-xl font-semibold text-white">{title}</span>
+                        {subtitle && <span className="mt-1 block text-sm text-slate-400">{subtitle}</span>}
+                    </span>
+                </button>
+                {action}
+            </div>
+
+            {isOpen ? children : null}
+        </section>
+    );
+}
+
+function RoundTimeline({ currentRound, maxRounds, status }) {
+    const total = Math.max(1, Number(maxRounds) || 1);
+    const activeRound = Math.max(0, Number(currentRound) || 0);
+
+    return (
+        <div className="timeline-track" aria-label="Round progress timeline">
+            {Array.from({ length: total }, (_, i) => {
+                const round = i + 1;
+                const isComplete = round <= activeRound;
+                const isActive = round === activeRound && status === "running";
+                return (
+                    <span
+                        key={round}
+                        className={`timeline-node ${isComplete ? "is-complete" : ""} ${isActive ? "is-active" : ""}`}
+                    >
+                        {round}
+                    </span>
+                );
+            })}
+        </div>
+    );
+}
+
 function Panel({ title, subtitle, action, children }) {
     return (
         <section className="glass-panel p-5 sm:p-6">
@@ -699,10 +982,10 @@ function Field({ label, value, onChange, ...rest }) {
 
 function Stat({ icon, label, value }) {
     return (
-        <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <div className="panel-muted">
             <div className="mb-2 flex items-center gap-2 text-slate-400">
                 {icon}
-                <span className="text-xs uppercase tracking-[0.18em]">{label}</span>
+                <span className="text-xs font-semibold tracking-wide">{label}</span>
             </div>
             <div className="text-lg font-semibold text-white">{value}</div>
         </div>
@@ -710,20 +993,8 @@ function Stat({ icon, label, value }) {
 }
 
 function StatusBadge({ status }) {
-    const styles = {
-        idle: "border-white/10 bg-white/5 text-slate-200",
-        connecting: "border-amber-300/20 bg-amber-400/10 text-amber-100",
-        running: "border-cyan-300/20 bg-cyan-400/10 text-cyan-100",
-        done: "border-emerald-300/20 bg-emerald-400/10 text-emerald-100",
-        error: "border-rose-300/20 bg-rose-400/10 text-rose-100",
-        aborted: "border-white/10 bg-slate-800 text-slate-200"
-    };
-
-    return (
-        <span className={`badge-soft ${styles[status] || styles.idle}`}>
-            Status: {status}
-        </span>
-    );
+    const label = `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
+    return <span className={`badge-soft status-badge status-${status}`}>{label}</span>;
 }
 
 function ModelPicker({ value, onChange }) {
@@ -759,26 +1030,56 @@ function ModelPicker({ value, onChange }) {
 
             <p className="text-xs text-slate-400">
                 {meta
-                    ? `${meta.provider} · ${meta.note}`
+                    ? `${meta.provider} - ${meta.note}`
                     : "You can also paste any provider/model alias supported by your LiteLLM setup."}
             </p>
         </div>
     );
 }
 
-function AgentEditor({ agent, index, canRemove, onChange, onRemove }) {
+function AgentEditor({ agent, index, isOpen, canRemove, onToggle, onChange, onRemove }) {
+    const [advancedOpen, setAdvancedOpen] = useState(false);
+    const meta = findModelMeta(agent.model);
+    const thinkingId = `agent-thinking-${index}`;
+    const searchId = `agent-search-${index}`;
+
+    useEffect(() => {
+        if (!agent.use_thinking) {
+            setAdvancedOpen(false);
+        }
+    }, [agent.use_thinking]);
+
     return (
-        <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                    <Bot className="h-4 w-4 text-cyan-300" />
-                    <div className="font-medium text-white">{agent.name || `Agent ${index + 1}`}</div>
-                </div>
+        <div className="agent-card">
+            <div className="mb-3 flex items-start gap-2">
+                <button
+                    type="button"
+                    className="agent-summary"
+                    onClick={onToggle}
+                    aria-expanded={isOpen}
+                >
+                    <div className="flex items-center gap-2">
+                        <Bot className="h-4 w-4 text-cyan-200" />
+                        <div className="font-medium text-white">{agent.name || `Agent ${index + 1}`}</div>
+                        {isOpen ? (
+                            <ChevronDown className="h-4 w-4 text-slate-400" />
+                        ) : (
+                            <ChevronRight className="h-4 w-4 text-slate-400" />
+                        )}
+                    </div>
+
+                    <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs text-slate-300">
+                        <span className="badge-soft">Temp {Number(agent.temperature).toFixed(2)}</span>
+                        <span className="badge-soft">{meta?.label || agent.model}</span>
+                        {agent.use_thinking ? <span className="badge-soft">Thinking</span> : null}
+                        {agent.use_web_search ? <span className="badge-soft">Web</span> : null}
+                    </div>
+                </button>
 
                 {canRemove && (
                     <button
                         type="button"
-                        className="rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-100 hover:bg-rose-400/20"
+                        className="btn-danger"
                         onClick={() => onRemove(index)}
                     >
                         Remove
@@ -786,85 +1087,122 @@ function AgentEditor({ agent, index, canRemove, onChange, onRemove }) {
                 )}
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-                <Field
-                    label="Agent name"
-                    value={agent.name}
-                    onChange={(v) => onChange(index, "name", v)}
-                />
-                <Field
-                    label="Temperature"
-                    value={agent.temperature}
-                    onChange={(v) => onChange(index, "temperature", Number(v))}
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                />
-            </div>
+            {isOpen ? (
+                <div className="space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <Field
+                            label="Agent name"
+                            value={agent.name}
+                            onChange={(v) => onChange(index, "name", v)}
+                        />
+                        <Field
+                            label="Temperature"
+                            value={agent.temperature}
+                            onChange={(v) => onChange(index, "temperature", Number(v))}
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                        />
+                    </div>
 
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <div className="flex items-center gap-3">
-                    <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-white/10 bg-white/5 text-cyan-500"
-                        checked={agent.use_thinking || false}
-                        onChange={(e) => onChange(index, "use_thinking", e.target.checked)}
-                    />
-                    <label className="text-sm text-slate-300">Use Extended Thinking</label>
-                </div>
-                <div className="flex items-center gap-3">
-                    <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-white/10 bg-white/5 text-cyan-500"
-                        checked={agent.use_web_search || false}
-                        onChange={(e) => onChange(index, "use_web_search", e.target.checked)}
-                    />
-                    <label className="text-sm text-slate-300">Enable Web Search</label>
-                </div>
-            </div>
-
-            {agent.use_thinking && (
-                <div className="mt-4 grid gap-4 sm:grid-cols-2 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-                    <Field
-                        label="Thinking Budget (tokens)"
-                        value={agent.thinking_budget || 16000}
-                        onChange={(v) => onChange(index, "thinking_budget", Number(v))}
-                        type="number"
-                        min="1024"
-                        step="1024"
-                    />
-                    <div>
-                        <label className="mb-2 block text-sm text-slate-300">Reasoning Effort (low/medium/high)</label>
-                        <select
-                            className="input-surface"
-                            value={agent.reasoning_effort || "medium"}
-                            onChange={(e) => onChange(index, "reasoning_effort", e.target.value)}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <label
+                            htmlFor={thinkingId}
+                            className="panel-muted flex cursor-pointer items-center gap-3"
                         >
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                        </select>
+                            <input
+                                id={thinkingId}
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-white/10 bg-white/5 text-cyan-500"
+                                checked={agent.use_thinking || false}
+                                onChange={(e) => onChange(index, "use_thinking", e.target.checked)}
+                            />
+                            <span className="text-sm text-slate-300">Use extended thinking</span>
+                        </label>
+                        <label
+                            htmlFor={searchId}
+                            className="panel-muted flex cursor-pointer items-center gap-3"
+                        >
+                            <input
+                                id={searchId}
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-white/10 bg-white/5 text-cyan-500"
+                                checked={agent.use_web_search || false}
+                                onChange={(e) => onChange(index, "use_web_search", e.target.checked)}
+                            />
+                            <span className="text-sm text-slate-300">Enable web search</span>
+                        </label>
+                    </div>
+
+                    {agent.use_thinking && (
+                        <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/6 p-3">
+                            <button
+                                type="button"
+                                className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-cyan-100"
+                                onClick={() => setAdvancedOpen((prev) => !prev)}
+                            >
+                                {advancedOpen ? (
+                                    <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                    <ChevronRight className="h-4 w-4" />
+                                )}
+                                Advanced reasoning settings
+                            </button>
+
+                            {advancedOpen ? (
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <Field
+                                        label="Thinking budget (tokens)"
+                                        value={agent.thinking_budget || 16000}
+                                        onChange={(v) => onChange(index, "thinking_budget", Number(v))}
+                                        type="number"
+                                        min="1024"
+                                        step="1024"
+                                    />
+                                    <div>
+                                        <label className="mb-2 block text-sm text-slate-300">
+                                            Reasoning effort
+                                        </label>
+                                        <select
+                                            className="input-surface"
+                                            value={agent.reasoning_effort || "medium"}
+                                            onChange={(e) =>
+                                                onChange(index, "reasoning_effort", e.target.value)
+                                            }
+                                        >
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="text-xs text-slate-400">
+                                    Advanced reasoning controls are hidden by default.
+                                </p>
+                            )}
+                        </div>
+                    )}
+
+                    <div>
+                        <label className="mb-2 block text-sm text-slate-300">Model</label>
+                        <ModelPicker
+                            value={agent.model}
+                            onChange={(value) => onChange(index, "model", value)}
+                        />
+                    </div>
+
+                    <div>
+                        <label className="mb-2 block text-sm text-slate-300">System prompt</label>
+                        <textarea
+                            className="input-surface min-h-[110px]"
+                            value={agent.system_prompt}
+                            onChange={(e) => onChange(index, "system_prompt", e.target.value)}
+                        />
                     </div>
                 </div>
-            )}
-
-            <div className="mt-4">
-                <label className="mb-2 block text-sm text-slate-300">Model</label>
-                <ModelPicker
-                    value={agent.model}
-                    onChange={(value) => onChange(index, "model", value)}
-                />
-            </div>
-
-            <div className="mt-4">
-                <label className="mb-2 block text-sm text-slate-300">System prompt</label>
-                <textarea
-                    className="input-surface min-h-[110px]"
-                    value={agent.system_prompt}
-                    onChange={(e) => onChange(index, "system_prompt", e.target.value)}
-                />
-            </div>
+            ) : null}
         </div>
     );
 }
@@ -900,7 +1238,7 @@ function RoundCard({ round }) {
                         </div>
 
                         <div className="mb-3 text-xs text-slate-400">
-                            confidence {Number(turn.confidence || 0).toFixed(2)} · changed mind:{" "}
+                            confidence {Number(turn.confidence || 0).toFixed(2)} - changed mind:{" "}
                             {turn.changed_mind ? "yes" : "no"}
                         </div>
 
@@ -943,6 +1281,16 @@ function RoundCard({ round }) {
     );
 }
 
+function EmptyState({ icon, title, text }) {
+    return (
+        <div className="empty-state">
+            {icon ? <div className="mb-2 text-slate-300">{icon}</div> : null}
+            <div className="mb-1 text-sm font-medium text-slate-200">{title}</div>
+            <p className="text-sm text-slate-400">{text}</p>
+        </div>
+    );
+}
+
 function SectionBlock({ title, children }) {
     return (
         <div className="mb-4 last:mb-0">
@@ -953,3 +1301,4 @@ function SectionBlock({ title, children }) {
         </div>
     );
 }
+
