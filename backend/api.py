@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -10,7 +11,9 @@ from pydantic import BaseModel, Field
 
 from debate_system import AgentConfig, DebateOrchestrator
 
-load_dotenv()
+# Load .env from the same directory as this file
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(title="Multi-Agent Debate API")
 
