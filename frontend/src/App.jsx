@@ -26,11 +26,17 @@ import {
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8001";
 const DENSITY_STORAGE_KEY = "debate-ui-density-v1";
 const APPEARANCE_STORAGE_KEY = "debate-ui-appearance-v1";
+const ANALYSIS_PHASE_LABELS = ["Clarify", "Research", "Challenge"];
 
 const EMPTY_RUN_STATE = {
     status: "idle",
+    workflowMode: "",
     rounds: [],
+    phases: [],
+    phaseLabels: [],
     currentRound: 0,
+    currentPhaseIndex: 0,
+    currentPhaseLabel: "",
     leader: "",
     supportTally: {},
     finalResult: null,
@@ -54,6 +60,7 @@ function makeAgent(index) {
 function createPayload(config) {
     return {
         question: config.question,
+        workflow_mode: config.workflowMode || "debate",
         agents: config.agents.map((agent) => ({
             ...agent,
             temperature: Number(agent.temperature),
@@ -109,6 +116,18 @@ export default function App() {
 
     const currentPreset = getPresetById(selectedPresetId, savedPresets) ?? BUILTIN_PRESETS[0];
     const isRunning = runState.status === "connecting" || runState.status === "running";
+    const configuredWorkflowMode = config.workflowMode || "debate";
+    const activeWorkflowMode = runState.workflowMode || configuredWorkflowMode;
+    const isAnalysisMode = activeWorkflowMode === "analysis";
+    const timelineLabels = isAnalysisMode
+        ? (runState.phaseLabels.length ? runState.phaseLabels : ANALYSIS_PHASE_LABELS)
+        : Array.from({ length: Math.max(1, Number(config.maxRounds) || 1) }, (_, index) => `${index + 1}`);
+    const progressIndex = isAnalysisMode
+        ? (runState.finalResult?.phases_run || runState.currentPhaseIndex || 0)
+        : (runState.finalResult?.rounds_run || runState.currentRound || 0);
+    const progressLabel = isAnalysisMode
+        ? (runState.currentPhaseLabel || (progressIndex ? timelineLabels[progressIndex - 1] : ""))
+        : "";
 
     const duplicateNames = useMemo(() => {
         const names = config.agents.map((a) => a.name.trim()).filter(Boolean);
@@ -234,6 +253,8 @@ export default function App() {
     async function handleRun() {
         setRunState({
             ...EMPTY_RUN_STATE,
+            workflowMode: config.workflowMode || "debate",
+            phaseLabels: config.workflowMode === "analysis" ? ANALYSIS_PHASE_LABELS : [],
             status: "connecting",
             startedAt: new Date().toISOString()
         });
@@ -252,6 +273,8 @@ export default function App() {
                             return {
                                 ...prev,
                                 status: "running",
+                                workflowMode: payload.workflow_mode || prev.workflowMode,
+                                phaseLabels: payload.phase_labels || prev.phaseLabels,
                                 error: "",
                                 startedAt: prev.startedAt || new Date().toISOString()
                             };
@@ -262,6 +285,18 @@ export default function App() {
                                 ...prev,
                                 status: "running",
                                 currentRound: payload.round_num || prev.currentRound
+                            };
+                        }
+
+                        if (event === "phase_started") {
+                            return {
+                                ...prev,
+                                status: "running",
+                                currentPhaseIndex: payload.phase_index || prev.currentPhaseIndex,
+                                currentPhaseLabel: payload.phase_label || prev.currentPhaseLabel,
+                                phaseLabels: prev.phaseLabels.length
+                                    ? prev.phaseLabels
+                                    : ANALYSIS_PHASE_LABELS
                             };
                         }
 
@@ -279,11 +314,25 @@ export default function App() {
                             };
                         }
 
+                        if (event === "phase_completed") {
+                            const phases = [...prev.phases.filter((p) => p.phase_index !== payload.phase_index), payload]
+                                .sort((a, b) => a.phase_index - b.phase_index);
+
+                            return {
+                                ...prev,
+                                status: "running",
+                                phases,
+                                currentPhaseIndex: payload.phase_index || prev.currentPhaseIndex,
+                                currentPhaseLabel: payload.phase_label || prev.currentPhaseLabel
+                            };
+                        }
+
                         if (event === "final") {
                             return {
                                 ...prev,
                                 status: "done",
                                 finalResult: payload.result,
+                                workflowMode: payload.result?.workflow_mode || prev.workflowMode,
                                 leader: payload.result?.leader || prev.leader,
                                 supportTally: payload.result?.support_tally || prev.supportTally
                             };
@@ -331,8 +380,6 @@ export default function App() {
         }));
     }
 
-    const timelineRound = runState.finalResult?.rounds_run || runState.currentRound || 0;
-
     return (
         <div
             className={`app-shell theme-${appearance} ${density === "compact" ? "density-compact" : "density-comfortable"}`}
@@ -344,16 +391,20 @@ export default function App() {
                 onRun={handleRun}
                 onStop={handleStop}
                 status={runState.status}
+                workflowMode={activeWorkflowMode}
+                progressIndex={progressIndex}
+                progressLabel={progressLabel}
+                progressTotal={timelineLabels.length}
             />
 
             <div className="mx-auto max-w-[1500px] px-4 pb-28 pt-6 sm:px-6 lg:px-8 lg:pb-10">
                 <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div className="space-y-3">
                         <h1 className="logo-text">Agora</h1>
-                        <div className="section-title">Agentic LLM Debate Workbench</div>
+                        <div className="section-title">Agentic LLM Reasoning Workbench</div>
                         <p className="max-w-3xl text-slate-300">
-                            Mix models across providers, stream each debate round live, and save
-                            reusable presets for recurring workflows.
+                            Mix models across providers, run either debates or structured analysis workflows,
+                            and save reusable presets for recurring questions.
                         </p>
                     </div>
 
@@ -474,56 +525,112 @@ export default function App() {
                         </CollapsiblePanel>
 
                         <CollapsiblePanel
-                            title="Debate setup"
-                            subtitle="Question, convergence settings, and final synthesizer."
+                            title={configuredWorkflowMode === "analysis" ? "Workflow setup" : "Debate setup"}
+                            subtitle={
+                                configuredWorkflowMode === "analysis"
+                                    ? "Pick the workflow, write the brief, and choose the final synthesizer."
+                                    : "Question, convergence settings, and final synthesizer."
+                            }
                             isOpen={openSections.setup}
                             onToggle={() => toggleSection("setup")}
                         >
-                            <label className="mb-2 block text-sm text-slate-300">Question</label>
+                            <div className="mb-5">
+                                <div className="mb-2 block text-sm text-slate-300">Workflow</div>
+                                <WorkflowToggle
+                                    value={config.workflowMode}
+                                    onChange={(value) => {
+                                        patchConfig("workflowMode", value);
+                                        setRunState({
+                                            ...EMPTY_RUN_STATE,
+                                            workflowMode: value,
+                                            phaseLabels: value === "analysis" ? ANALYSIS_PHASE_LABELS : []
+                                        });
+                                    }}
+                                />
+                            </div>
+
+                            <label className="mb-2 block text-sm text-slate-300">
+                                {configuredWorkflowMode === "analysis" ? "Question or brief" : "Question"}
+                            </label>
                             <textarea
                                 className="input-surface min-h-[180px]"
                                 value={config.question}
                                 onChange={(e) => patchConfig("question", e.target.value)}
                             />
 
-                            <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                                <Field
-                                    label="Max rounds"
-                                    value={config.maxRounds}
-                                    onChange={(v) => patchConfig("maxRounds", Number(v))}
-                                    type="number"
-                                    min="1"
-                                />
-                                <Field
-                                    label="Consensus threshold"
-                                    value={config.consensusThreshold}
-                                    onChange={(v) => patchConfig("consensusThreshold", Number(v))}
-                                    type="number"
-                                    min="0"
-                                    max="1"
-                                    step="0.01"
-                                />
-                                <Field
-                                    label="Stable rounds"
-                                    value={config.stableRounds}
-                                    onChange={(v) => patchConfig("stableRounds", Number(v))}
-                                    type="number"
-                                    min="1"
-                                />
-                                <Field
-                                    label="Synthesizer temperature"
-                                    value={config.synthesizerTemperature}
-                                    onChange={(v) => patchConfig("synthesizerTemperature", Number(v))}
-                                    type="number"
-                                    min="0"
-                                    max="1"
-                                    step="0.01"
-                                />
-                            </div>
+                            {configuredWorkflowMode === "analysis" ? (
+                                <div className="mt-5 rounded-2xl border border-cyan-400/20 bg-cyan-400/6 p-4">
+                                    <div className="mb-3 text-sm font-medium text-cyan-100">
+                                        Structured analysis pipeline
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {ANALYSIS_PHASE_LABELS.map((label) => (
+                                            <span key={label} className="badge-soft">
+                                                {label}
+                                            </span>
+                                        ))}
+                                    </div>
+                                    <p className="mt-3 text-sm text-slate-300">
+                                        Analysis mode keeps the workflow fixed so the UI stays compact while
+                                        still producing a stronger, more explicit final synthesis.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                                    <Field
+                                        label="Max rounds"
+                                        value={config.maxRounds}
+                                        onChange={(v) => patchConfig("maxRounds", Number(v))}
+                                        type="number"
+                                        min="1"
+                                    />
+                                    <Field
+                                        label="Consensus threshold"
+                                        value={config.consensusThreshold}
+                                        onChange={(v) => patchConfig("consensusThreshold", Number(v))}
+                                        type="number"
+                                        min="0"
+                                        max="1"
+                                        step="0.01"
+                                    />
+                                    <Field
+                                        label="Stable rounds"
+                                        value={config.stableRounds}
+                                        onChange={(v) => patchConfig("stableRounds", Number(v))}
+                                        type="number"
+                                        min="1"
+                                    />
+                                    <Field
+                                        label="Synthesizer temperature"
+                                        value={config.synthesizerTemperature}
+                                        onChange={(v) => patchConfig("synthesizerTemperature", Number(v))}
+                                        type="number"
+                                        min="0"
+                                        max="1"
+                                        step="0.01"
+                                    />
+                                </div>
+                            )}
+
+                            {configuredWorkflowMode === "analysis" ? (
+                                <div className="mt-5">
+                                    <Field
+                                        label="Synthesizer temperature"
+                                        value={config.synthesizerTemperature}
+                                        onChange={(v) => patchConfig("synthesizerTemperature", Number(v))}
+                                        type="number"
+                                        min="0"
+                                        max="1"
+                                        step="0.01"
+                                    />
+                                </div>
+                            ) : null}
 
                             <div className="mt-5">
                                 <label className="mb-2 block text-sm text-slate-300">
-                                    Synthesizer model
+                                    {configuredWorkflowMode === "analysis"
+                                        ? "Final synthesizer model"
+                                        : "Synthesizer model"}
                                 </label>
                                 <ModelPicker
                                     value={config.synthesizerModel}
@@ -534,7 +641,11 @@ export default function App() {
 
                         <CollapsiblePanel
                             title="Agents"
-                            subtitle="Each agent can run on a different model and persona."
+                            subtitle={
+                                configuredWorkflowMode === "analysis"
+                                    ? "Each agent acts as a reusable role inside the structured analysis pipeline."
+                                    : "Each agent can run on a different model and persona."
+                            }
                             isOpen={openSections.agents}
                             onToggle={() => toggleSection("agents")}
                             action={
@@ -546,7 +657,8 @@ export default function App() {
                         >
                             {duplicateNames && (
                                 <div className="mb-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                                    Agent names must be unique, because agents vote by name.
+                                    Agent names must be unique so critiques, summaries, and votes can reference
+                                    them clearly.
                                 </div>
                             )}
 
@@ -576,61 +688,110 @@ export default function App() {
                                 onRun={handleRun}
                                 onStop={handleStop}
                                 status={runState.status}
-                                currentRound={runState.currentRound}
-                                maxRounds={config.maxRounds}
+                                workflowMode={activeWorkflowMode}
+                                progressIndex={progressIndex}
+                                progressLabel={progressLabel}
+                                progressTotal={timelineLabels.length}
                             />
                         </div>
 
                         <Panel
                             title="Live monitor"
-                            subtitle="Streamed round updates from the backend."
+                            subtitle={
+                                isAnalysisMode
+                                    ? "Streamed workflow phases from the backend."
+                                    : "Streamed round updates from the backend."
+                            }
                         >
                             <div className="mb-5 flex flex-wrap items-center gap-2">
                                 <StatusBadge status={runState.status} />
                                 {currentPreset && <span className="badge-soft">{currentPreset.name}</span>}
+                                <span className="badge-soft">
+                                    {isAnalysisMode ? "Analysis workflow" : "Debate workflow"}
+                                </span>
                             </div>
 
                             <div className="mb-5">
-                                <div className="mb-2 text-sm text-slate-300">Round timeline</div>
-                                <RoundTimeline
-                                    currentRound={timelineRound}
-                                    maxRounds={Number(config.maxRounds)}
+                                <div className="mb-2 text-sm text-slate-300">
+                                    {isAnalysisMode ? "Workflow timeline" : "Round timeline"}
+                                </div>
+                                <WorkflowTimeline
+                                    labels={timelineLabels}
+                                    activeIndex={progressIndex}
                                     status={runState.status}
                                 />
                             </div>
 
-                            <div className="grid gap-4 sm:grid-cols-3">
-                                <Stat
-                                    icon={<Activity className="h-4 w-4" />}
-                                    label="Current round"
-                                    value={runState.currentRound || "--"}
-                                />
-                                <Stat
-                                    icon={<Brain className="h-4 w-4" />}
-                                    label="Leader"
-                                    value={runState.leader || "--"}
-                                />
-                                <Stat
-                                    icon={<Bot className="h-4 w-4" />}
-                                    label="Agents"
-                                    value={config.agents.length}
-                                />
-                            </div>
+                            {isAnalysisMode ? (
+                                <>
+                                    <div className="grid gap-4 sm:grid-cols-3">
+                                        <Stat
+                                            icon={<Activity className="h-4 w-4" />}
+                                            label="Current phase"
+                                            value={runState.currentPhaseLabel || "--"}
+                                        />
+                                        <Stat
+                                            icon={<Brain className="h-4 w-4" />}
+                                            label="Completed phases"
+                                            value={runState.phases.length}
+                                        />
+                                        <Stat
+                                            icon={<Bot className="h-4 w-4" />}
+                                            label="Agents"
+                                            value={config.agents.length}
+                                        />
+                                    </div>
 
-                            <div className="mt-5">
-                                <div className="mb-2 text-sm text-slate-300">Support tally</div>
-                                <div className="flex flex-wrap gap-2">
-                                    {Object.keys(runState.supportTally || {}).length === 0 ? (
-                                        <span className="text-sm text-slate-500">No votes yet.</span>
-                                    ) : (
-                                        Object.entries(runState.supportTally).map(([name, votes]) => (
-                                            <span key={name} className="badge-soft">
-                                                {name}: {votes}
-                                            </span>
-                                        ))
-                                    )}
-                                </div>
-                            </div>
+                                    <div className="mt-5">
+                                        <div className="mb-2 text-sm text-slate-300">Phase status</div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {timelineLabels.map((label, index) => {
+                                                const isDone = index + 1 <= progressIndex;
+                                                return (
+                                                    <span key={label} className={`badge-soft ${isDone ? "text-white" : ""}`}>
+                                                        {label}
+                                                    </span>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="grid gap-4 sm:grid-cols-3">
+                                        <Stat
+                                            icon={<Activity className="h-4 w-4" />}
+                                            label="Current round"
+                                            value={runState.currentRound || "--"}
+                                        />
+                                        <Stat
+                                            icon={<Brain className="h-4 w-4" />}
+                                            label="Leader"
+                                            value={runState.leader || "--"}
+                                        />
+                                        <Stat
+                                            icon={<Bot className="h-4 w-4" />}
+                                            label="Agents"
+                                            value={config.agents.length}
+                                        />
+                                    </div>
+
+                                    <div className="mt-5">
+                                        <div className="mb-2 text-sm text-slate-300">Support tally</div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {Object.keys(runState.supportTally || {}).length === 0 ? (
+                                                <span className="text-sm text-slate-500">No votes yet.</span>
+                                            ) : (
+                                                Object.entries(runState.supportTally).map(([name, votes]) => (
+                                                    <span key={name} className="badge-soft">
+                                                        {name}: {votes}
+                                                    </span>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
 
                             {runState.error && (
                                 <div className="mt-5 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
@@ -641,59 +802,87 @@ export default function App() {
 
                         <Panel
                             title="Final answer"
-                            subtitle="The converged result or strongest surviving answer."
+                            subtitle={
+                                isAnalysisMode
+                                    ? "A final synthesis built from the strongest surviving analysis."
+                                    : "The converged result or strongest surviving answer."
+                            }
                         >
                             {runState.finalResult ? (
-                                <div className="space-y-4">
-                                    <div className="flex flex-wrap gap-2">
-                                        <span className="badge-soft">
-                                            Converged: {runState.finalResult.converged ? "Yes" : "No"}
-                                        </span>
-                                        <span className="badge-soft">
-                                            Rounds: {runState.finalResult.rounds_run}
-                                        </span>
-                                        <span className="badge-soft">
-                                            Leader: {runState.finalResult.leader}
-                                        </span>
-                                    </div>
+                                isAnalysisMode ? (
+                                    <AnalysisFinalAnswer result={runState.finalResult} />
+                                ) : (
+                                    <div className="space-y-4">
+                                        <div className="flex flex-wrap gap-2">
+                                            <span className="badge-soft">
+                                                Converged: {runState.finalResult.converged ? "Yes" : "No"}
+                                            </span>
+                                            <span className="badge-soft">
+                                                Rounds: {runState.finalResult.rounds_run}
+                                            </span>
+                                            <span className="badge-soft">
+                                                Leader: {runState.finalResult.leader}
+                                            </span>
+                                        </div>
 
-                                    <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-5">
-                                        <pre className="whitespace-pre-wrap text-sm leading-7 text-slate-100">
-                                            {runState.finalResult.final_answer}
-                                        </pre>
+                                        <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-5">
+                                            <pre className="whitespace-pre-wrap text-sm leading-7 text-slate-100">
+                                                {runState.finalResult.final_answer}
+                                            </pre>
+                                        </div>
                                     </div>
-                                </div>
+                                )
                             ) : (
                                 <EmptyState
                                     icon={<Sparkles className="h-5 w-5" />}
-                                    title={isRunning ? "Debate in progress" : "No final answer yet"}
+                                    title={isRunning ? "Workflow in progress" : "No final answer yet"}
                                     text={
                                         isRunning
-                                            ? "A synthesis appears after convergence or max rounds."
-                                            : "Run a debate to see the final answer here."
+                                            ? isAnalysisMode
+                                                ? "A synthesis appears after the final challenge phase."
+                                                : "A synthesis appears after convergence or max rounds."
+                                            : `Run a ${configuredWorkflowMode} workflow to see the final answer here.`
                                     }
                                 />
                             )}
                         </Panel>
 
                         <Panel
-                            title="Round transcript"
-                            subtitle="Live round-by-round debate as it streams in."
+                            title={isAnalysisMode ? "Workflow log" : "Round transcript"}
+                            subtitle={
+                                isAnalysisMode
+                                    ? "Live phase-by-phase analysis as it streams in."
+                                    : "Live round-by-round debate as it streams in."
+                            }
                         >
-                            {runState.rounds.length === 0 ? (
+                            {(isAnalysisMode ? runState.phases.length === 0 : runState.rounds.length === 0) ? (
                                 <EmptyState
-                                    title={isRunning ? "Waiting for round output" : "No rounds yet"}
+                                    title={
+                                        isRunning
+                                            ? isAnalysisMode
+                                                ? "Waiting for phase output"
+                                                : "Waiting for round output"
+                                            : isAnalysisMode
+                                                ? "No phases yet"
+                                                : "No rounds yet"
+                                    }
                                     text={
                                         isRunning
-                                            ? "Round events will stream here as each round completes."
-                                            : "Run a debate to populate the transcript."
+                                            ? isAnalysisMode
+                                                ? "Phase events will stream here as each phase completes."
+                                                : "Round events will stream here as each round completes."
+                                            : `Run a ${configuredWorkflowMode} workflow to populate the log.`
                                     }
                                 />
                             ) : (
                                 <div className="space-y-4">
-                                    {runState.rounds.map((round) => (
-                                        <RoundCard key={round.round_num} round={round} />
-                                    ))}
+                                    {isAnalysisMode
+                                        ? runState.phases.map((phase) => (
+                                            <PhaseCard key={phase.phase_index} phase={phase} />
+                                        ))
+                                        : runState.rounds.map((round) => (
+                                            <DebateRoundCard key={round.round_num} round={round} />
+                                        ))}
                                 </div>
                             )}
                         </Panel>
@@ -797,6 +986,19 @@ function AppearanceToggle({ appearance, onChange }) {
     );
 }
 
+function WorkflowToggle({ value, onChange }) {
+    return (
+        <SegmentedToggle
+            value={value}
+            onChange={onChange}
+            options={[
+                { label: "Debate", value: "debate" },
+                { label: "Analysis", value: "analysis" }
+            ]}
+        />
+    );
+}
+
 function SegmentedToggle({ value, onChange, options }) {
     return (
         <div className="toggle-group">
@@ -821,8 +1023,10 @@ function ActionStrip({
     onRun,
     onStop,
     status,
-    currentRound,
-    maxRounds
+    workflowMode,
+    progressIndex,
+    progressLabel,
+    progressTotal
 }) {
     return (
         <div className="action-strip">
@@ -830,8 +1034,11 @@ function ActionStrip({
                 <StatusBadge status={status} />
                 {currentPreset && <span className="badge-soft">{currentPreset.name}</span>}
                 <span className="badge-soft">
-                    Round {currentRound || 0}/{Math.max(1, Number(maxRounds) || 1)}
+                    {workflowMode === "analysis"
+                        ? `Phase ${progressIndex || 0}/${Math.max(1, Number(progressTotal) || 1)}`
+                        : `Round ${progressIndex || 0}/${Math.max(1, Number(progressTotal) || 1)}`}
                 </span>
+                {progressLabel ? <span className="badge-soft">{progressLabel}</span> : null}
             </div>
 
             <div className="flex gap-2">
@@ -846,7 +1053,7 @@ function ActionStrip({
                     ) : (
                         <Play className="h-4 w-4" />
                     )}
-                    {isRunning ? "Running..." : "Run debate"}
+                    {isRunning ? "Running..." : workflowMode === "analysis" ? "Run analysis" : "Run debate"}
                 </button>
 
                 <button type="button" className="btn-secondary" onClick={onStop} disabled={!isRunning}>
@@ -858,7 +1065,18 @@ function ActionStrip({
     );
 }
 
-function MobileActionBar({ canRun, currentPreset, isRunning, onRun, onStop, status }) {
+function MobileActionBar({
+    canRun,
+    currentPreset,
+    isRunning,
+    onRun,
+    onStop,
+    status,
+    workflowMode,
+    progressIndex,
+    progressLabel,
+    progressTotal
+}) {
     return (
         <div className="mobile-action-bar xl:hidden">
             <div className="mx-auto flex max-w-3xl items-center justify-between gap-2">
@@ -868,6 +1086,11 @@ function MobileActionBar({ canRun, currentPreset, isRunning, onRun, onStop, stat
                     </div>
                     <div className="truncate text-xs text-slate-400">
                         {currentPreset ? currentPreset.name : "No preset"}
+                    </div>
+                    <div className="truncate text-xs text-slate-500">
+                        {workflowMode === "analysis"
+                            ? `Phase ${progressIndex || 0}/${Math.max(1, Number(progressTotal) || 1)}${progressLabel ? ` - ${progressLabel}` : ""}`
+                            : `Round ${progressIndex || 0}/${Math.max(1, Number(progressTotal) || 1)}`}
                     </div>
                 </div>
 
@@ -883,7 +1106,7 @@ function MobileActionBar({ canRun, currentPreset, isRunning, onRun, onStop, stat
                         ) : (
                             <Play className="h-4 w-4" />
                         )}
-                        Run
+                        {workflowMode === "analysis" ? "Analyze" : "Run"}
                     </button>
 
                     <button
@@ -928,22 +1151,23 @@ function CollapsiblePanel({ title, subtitle, isOpen, onToggle, action, children 
     );
 }
 
-function RoundTimeline({ currentRound, maxRounds, status }) {
-    const total = Math.max(1, Number(maxRounds) || 1);
-    const activeRound = Math.max(0, Number(currentRound) || 0);
+function WorkflowTimeline({ labels, activeIndex, status }) {
+    const safeLabels = labels.length ? labels : ["1"];
+    const activeStep = Math.max(0, Number(activeIndex) || 0);
 
     return (
-        <div className="timeline-track" aria-label="Round progress timeline">
-            {Array.from({ length: total }, (_, i) => {
-                const round = i + 1;
-                const isComplete = round <= activeRound;
-                const isActive = round === activeRound && status === "running";
+        <div className="timeline-track" aria-label="Workflow progress timeline">
+            {safeLabels.map((label, index) => {
+                const step = index + 1;
+                const isComplete = step <= activeStep;
+                const isActive = step === activeStep && status === "running";
                 return (
                     <span
-                        key={round}
+                        key={`${label}-${step}`}
                         className={`timeline-node ${isComplete ? "is-complete" : ""} ${isActive ? "is-active" : ""}`}
+                        title={label}
                     >
-                        {round}
+                        {step}
                     </span>
                 );
             })}
@@ -1040,14 +1264,21 @@ function ModelPicker({ value, onChange }) {
 function AgentEditor({ agent, index, isOpen, canRemove, onToggle, onChange, onRemove }) {
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const meta = findModelMeta(agent.model);
+    const supportsThinking = meta?.supportsThinking !== false;
     const thinkingId = `agent-thinking-${index}`;
     const searchId = `agent-search-${index}`;
 
     useEffect(() => {
+        if (!supportsThinking && agent.use_thinking) {
+            onChange(index, "use_thinking", false);
+            setAdvancedOpen(false);
+            return;
+        }
+
         if (!agent.use_thinking) {
             setAdvancedOpen(false);
         }
-    }, [agent.use_thinking]);
+    }, [agent.use_thinking, index, onChange, supportsThinking]);
 
     return (
         <div className="agent-card">
@@ -1115,10 +1346,15 @@ function AgentEditor({ agent, index, isOpen, canRemove, onToggle, onChange, onRe
                                 id={thinkingId}
                                 type="checkbox"
                                 className="h-4 w-4 rounded border-white/10 bg-white/5 text-cyan-500"
-                                checked={agent.use_thinking || false}
+                                checked={supportsThinking && (agent.use_thinking || false)}
+                                disabled={!supportsThinking}
                                 onChange={(e) => onChange(index, "use_thinking", e.target.checked)}
                             />
-                            <span className="text-sm text-slate-300">Use extended thinking</span>
+                            <span className="text-sm text-slate-300">
+                                {supportsThinking
+                                    ? "Use extended thinking"
+                                    : "Extended thinking unavailable for this model"}
+                            </span>
                         </label>
                         <label
                             htmlFor={searchId}
@@ -1191,6 +1427,11 @@ function AgentEditor({ agent, index, isOpen, canRemove, onToggle, onChange, onRe
                             value={agent.model}
                             onChange={(value) => onChange(index, "model", value)}
                         />
+                        {!supportsThinking ? (
+                            <p className="mt-2 text-xs text-amber-200">
+                                This Anthropic model supports standard mode only.
+                            </p>
+                        ) : null}
                     </div>
 
                     <div>
@@ -1207,7 +1448,92 @@ function AgentEditor({ agent, index, isOpen, canRemove, onToggle, onChange, onRe
     );
 }
 
-function RoundCard({ round }) {
+function AnalysisFinalAnswer({ result }) {
+    return (
+        <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+                <span className="badge-soft">Phases: {result.phases_run}</span>
+                <span className="badge-soft">Winning agent: {result.winning_agent || "--"}</span>
+            </div>
+
+            {result.executive_summary ? (
+                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/6 p-5">
+                    <p className="whitespace-pre-wrap text-sm leading-7 text-cyan-50">
+                        {result.executive_summary}
+                    </p>
+                </div>
+            ) : null}
+
+            <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-5">
+                <pre className="whitespace-pre-wrap text-sm leading-7 text-slate-100">
+                    {result.final_answer}
+                </pre>
+            </div>
+
+            <ListBlock title="Why this answer" items={result.why_this_answer} emptyText="" />
+            <ListBlock title="Key uncertainties" items={result.uncertainties} emptyText="" />
+            <ListBlock title="Credible alternatives" items={result.alternatives} emptyText="" />
+            <ListBlock title="Follow-ups" items={result.follow_ups} emptyText="" />
+        </div>
+    );
+}
+
+function PhaseCard({ phase }) {
+    return (
+        <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-5">
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+                <span className="badge-soft">{phase.phase_label}</span>
+                {phase.phase_description ? (
+                    <span className="text-sm text-slate-400">{phase.phase_description}</span>
+                ) : null}
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+                {phase.turns?.map((turn, idx) => (
+                    <div
+                        key={`${turn.agent}-${idx}`}
+                        className="rounded-2xl border border-white/10 bg-slate-950/70 p-4"
+                    >
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-medium text-white">{turn.agent}</div>
+                            <span className="badge-soft">
+                                confidence {Number(turn.confidence || 0).toFixed(2)}
+                            </span>
+                        </div>
+
+                        <SectionBlock title="Answer">
+                            <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">
+                                {turn.answer}
+                            </p>
+                        </SectionBlock>
+
+                        <ListBlock title="Claims" items={turn.claims} />
+                        <ListBlock title="Evidence" items={turn.evidence} />
+                        <ListBlock title="Assumptions" items={turn.assumptions} />
+                        <ListBlock title="Uncertainties" items={turn.uncertainties} />
+
+                        <SectionBlock title="Critiques">
+                            {turn.critiques?.length ? (
+                                <ul className="list-disc space-y-1 pl-5 text-sm text-slate-300">
+                                    {turn.critiques.map((item, i) => (
+                                        <li key={i}>
+                                            <span className="font-medium text-white">{item.target}:</span>{" "}
+                                            {item.critique}
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <p className="text-sm text-slate-500">No critiques recorded.</p>
+                            )}
+                        </SectionBlock>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function DebateRoundCard({ round }) {
     return (
         <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-5">
             <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -1248,17 +1574,7 @@ function RoundCard({ round }) {
                             </p>
                         </SectionBlock>
 
-                        <SectionBlock title="Reasoning">
-                            {turn.reasoning?.length ? (
-                                <ul className="list-disc space-y-1 pl-5 text-sm text-slate-300">
-                                    {turn.reasoning.map((item, i) => (
-                                        <li key={i}>{item}</li>
-                                    ))}
-                                </ul>
-                            ) : (
-                                <p className="text-sm text-slate-500">No reasoning provided.</p>
-                            )}
-                        </SectionBlock>
+                        <ListBlock title="Reasoning" items={turn.reasoning} emptyText="No reasoning provided." />
 
                         <SectionBlock title="Critiques">
                             {turn.critiques?.length ? (
@@ -1302,3 +1618,20 @@ function SectionBlock({ title, children }) {
     );
 }
 
+function ListBlock({ title, items, emptyText = "No items provided." }) {
+    if (!items?.length && !emptyText) return null;
+
+    return (
+        <SectionBlock title={title}>
+            {items?.length ? (
+                <ul className="list-disc space-y-1 pl-5 text-sm text-slate-300">
+                    {items.map((item, index) => (
+                        <li key={index}>{item}</li>
+                    ))}
+                </ul>
+            ) : (
+                <p className="text-sm text-slate-500">{emptyText}</p>
+            )}
+        </SectionBlock>
+    );
+}

@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -9,11 +9,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from debate_system import AgentConfig, DebateOrchestrator
+from debate_system import AgentConfig, AnalysisOrchestrator, DebateOrchestrator
 
-# Load .env from the same directory as this file
-env_path = Path(__file__).parent / ".env"
-load_dotenv(dotenv_path=env_path)
+def load_project_env() -> None:
+    backend_dir = Path(__file__).resolve().parent
+    env_path = backend_dir.parent / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
+
+
+load_project_env()
 
 app = FastAPI(title="Multi-Agent Debate API")
 
@@ -40,6 +45,7 @@ class AgentSpec(BaseModel):
 class DebateRequest(BaseModel):
     question: str
     agents: List[AgentSpec]
+    workflow_mode: Literal["debate", "analysis"] = "debate"
     max_rounds: int = 5
     consensus_threshold: float = Field(default=0.67, ge=0.0, le=1.0)
     stable_rounds: int = 2
@@ -48,15 +54,24 @@ class DebateRequest(BaseModel):
     max_concurrent_agents: Optional[int] = None
 
 
-def build_orchestrator(req: DebateRequest) -> DebateOrchestrator:
+def build_orchestrator(req: DebateRequest):
+    common_kwargs = {
+        "agents": [AgentConfig(**a.model_dump()) for a in req.agents],
+        "synthesizer_model": req.synthesizer_model,
+        "synthesizer_temperature": req.synthesizer_temperature,
+        "max_concurrent_agents": req.max_concurrent_agents,
+    }
+    if req.workflow_mode == "analysis":
+        return AnalysisOrchestrator(**common_kwargs)
+
     return DebateOrchestrator(
-        agents=[AgentConfig(**a.model_dump()) for a in req.agents],
+        agents=common_kwargs["agents"],
         max_rounds=req.max_rounds,
         consensus_threshold=req.consensus_threshold,
         stable_rounds=req.stable_rounds,
-        synthesizer_model=req.synthesizer_model,
-        synthesizer_temperature=req.synthesizer_temperature,
-        max_concurrent_agents=req.max_concurrent_agents,
+        synthesizer_model=common_kwargs["synthesizer_model"],
+        synthesizer_temperature=common_kwargs["synthesizer_temperature"],
+        max_concurrent_agents=common_kwargs["max_concurrent_agents"],
     )
 
 

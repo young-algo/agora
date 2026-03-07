@@ -30,7 +30,8 @@ export const MODEL_GROUPS = [
             {
                 value: "anthropic/claude-haiku-4-5-20251001",
                 label: "Claude 4.5 Haiku",
-                note: "Balanced performance/cost"
+                note: "Balanced performance/cost",
+                supportsThinking: false
             }
         ]
     },

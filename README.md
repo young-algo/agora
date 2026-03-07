@@ -28,22 +28,22 @@ A multi-agent AI debate system where configurable LLM agents debate a question o
 ## Backend setup
 
 ```bash
+cp .env.example .env
 cd backend
 uv sync
-cp .env.example .env
 uv run uvicorn api:app --reload
 ```
 
 Backend runs at:
 
 ```bash
-http://127.0.0.1:8000
+http://127.0.0.1:8001
 ```
 
 Health check:
 
 ```bash
-http://127.0.0.1:8000/health
+http://127.0.0.1:8001/health
 ```
 
 ---
@@ -53,7 +53,6 @@ http://127.0.0.1:8000/health
 ```bash
 cd frontend
 npm install
-cp .env.example .env
 npm run dev
 ```
 
@@ -67,13 +66,13 @@ http://localhost:5173
 
 ## Environment variables
 
-Backend:
+Single repo-root `.env`:
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY`, depending on your LiteLLM config
-
-Frontend:
-- `VITE_API_URL=http://127.0.0.1:8000`
+- `MOONSHOT_API_KEY`
+- `OPENROUTER_API_KEY`
+- `VITE_API_URL=http://127.0.0.1:8001`
 
 ---
 

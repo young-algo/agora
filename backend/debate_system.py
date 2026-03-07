@@ -12,6 +12,27 @@ import openai
 from google import genai
 from google.genai import types
 
+TURN_MAX_OUTPUT_TOKENS = 2048
+FINAL_MAX_OUTPUT_TOKENS = 3072
+
+ANALYSIS_PHASES = [
+    {
+        "key": "clarify",
+        "label": "Clarify",
+        "description": "Frame the question, surface assumptions, and draft an initial answer.",
+    },
+    {
+        "key": "research",
+        "label": "Research",
+        "description": "Strengthen the answer with the best available evidence and examples.",
+    },
+    {
+        "key": "challenge",
+        "label": "Challenge",
+        "description": "Pressure-test the strongest answer, expose weak assumptions, and refine it.",
+    },
+]
+
 
 @dataclass
 class AgentConfig:
@@ -39,6 +60,21 @@ class AgentTurn:
     confidence: float = 0.5
     support_for: str = ""
     changed_mind: bool = False
+    raw: str = ""
+
+
+@dataclass
+class AnalysisTurn:
+    agent: str
+    phase_key: str
+    phase_label: str
+    answer: str
+    claims: List[str] = field(default_factory=list)
+    evidence: List[str] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+    uncertainties: List[str] = field(default_factory=list)
+    critiques: List[Dict[str, str]] = field(default_factory=list)
+    confidence: float = 0.5
     raw: str = ""
 
 
@@ -112,26 +148,198 @@ def normalize_turn(
     )
 
 
+def normalize_analysis_turn(
+    data: Dict[str, Any],
+    *,
+    agent_name: str,
+    phase_key: str,
+    phase_label: str,
+    raw: str,
+) -> AnalysisTurn:
+    answer = str(data.get("answer") or raw).strip()
+
+    def normalize_list(key: str) -> List[str]:
+        value = data.get(key, [])
+        if isinstance(value, str):
+            value = [value]
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    critiques = data.get("critiques", [])
+    normalized_critiques = []
+    if isinstance(critiques, list):
+        for item in critiques:
+            if isinstance(item, dict):
+                target = str(item.get("target", "unknown")).strip() or "unknown"
+                critique = str(item.get("critique", "")).strip()
+                if critique:
+                    normalized_critiques.append({"target": target, "critique": critique})
+            elif isinstance(item, str) and item.strip():
+                normalized_critiques.append({"target": "unknown", "critique": item.strip()})
+
+    try:
+        confidence = float(data.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    confidence = max(0.0, min(1.0, confidence))
+
+    return AnalysisTurn(
+        agent=agent_name,
+        phase_key=phase_key,
+        phase_label=phase_label,
+        answer=answer,
+        claims=normalize_list("claims"),
+        evidence=normalize_list("evidence"),
+        assumptions=normalize_list("assumptions"),
+        uncertainties=normalize_list("uncertainties"),
+        critiques=normalized_critiques,
+        confidence=confidence,
+        raw=raw,
+    )
+
+
+def _anthropic_thinking(use_thinking: bool) -> Optional[Dict[str, str]]:
+    if not use_thinking:
+        return None
+    # Anthropic's current SDK deprecates fixed-budget "enabled" thinking for Claude 4.6.
+    return {"type": "adaptive"}
+
+
+def _gemini_thinking_config(model_name: str, use_thinking: bool, thinking_budget: int) -> Optional[types.ThinkingConfig]:
+    if not use_thinking:
+        return None
+
+    if model_name == "gemini-3.1-flash-lite-preview":
+        return types.ThinkingConfig(thinking_level="MINIMAL")
+
+    return types.ThinkingConfig(thinking_budget=thinking_budget)
+
+
+def _extract_openai_response_text(response: Any) -> str:
+    raw_extracted = None
+    if hasattr(response, "output"):
+        for item in response.output:
+            if type(item).__name__ == "ResponseOutputMessage" and hasattr(item, "content"):
+                for block in item.content:
+                    if type(block).__name__ == "ResponseOutputText" and hasattr(block, "text"):
+                        raw_extracted = block.text
+                        break
+                if raw_extracted:
+                    break
+    return raw_extracted if raw_extracted else str(response)
+
+
+async def generate_text(
+    *,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    use_thinking: bool = False,
+    thinking_budget: int = 16000,
+    reasoning_effort: str = "medium",
+    use_web_search: bool = False,
+    max_output_tokens: int = TURN_MAX_OUTPUT_TOKENS,
+    verbosity: str = "low",
+) -> str:
+    provider = model.split("/")[0] if "/" in model else "openai"
+    model_name = model.split("/", 1)[1] if "/" in model else model
+
+    if provider == "anthropic":
+        client = anthropic.AsyncAnthropic()
+        kwargs = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": user_prompt}],
+            "system": system_prompt,
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        thinking = _anthropic_thinking(use_thinking)
+        if thinking:
+            kwargs["thinking"] = thinking
+            # Claude adaptive thinking only accepts temperature=1.
+            kwargs["temperature"] = 1
+        if use_web_search:
+            kwargs["tools"] = [{
+                "name": "web_search",
+                "type": "web_search_20250305",
+                "user_location": {"type": "approximate", "timezone": "America/New_York"},
+            }]
+        response = await client.messages.create(**kwargs)
+        text_blocks = [block.text for block in response.content if getattr(block, "type", "") == "text"]
+        raw = text_blocks[0] if text_blocks else str(response.content)
+    elif provider == "openai":
+        client = openai.AsyncOpenAI()
+        if "gpt-5" in model_name:
+            kwargs = {
+                "model": model_name,
+                "input": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "text": {"format": {"type": "text"}, "verbosity": verbosity},
+                "max_output_tokens": max_output_tokens,
+            }
+            if use_thinking:
+                kwargs["reasoning"] = {"effort": reasoning_effort}
+            if use_web_search:
+                kwargs["tools"] = [{
+                    "type": "web_search",
+                    "user_location": {"type": "approximate", "timezone": "America/New_York"},
+                    "search_context_size": "medium",
+                }]
+            response = await client.responses.create(**kwargs)
+            raw = _extract_openai_response_text(response)
+        else:
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_tokens=max_output_tokens,
+            )
+            raw = response.choices[0].message.content
+    elif provider == "gemini":
+        import os
+
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        client = genai.Client(api_key=api_key)
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        )
+        thinking_config = _gemini_thinking_config(model_name, use_thinking, thinking_budget)
+        if thinking_config:
+            config.thinking_config = thinking_config
+        if use_web_search:
+            config.tools = [{"google_search": {}}]
+
+        gemini_contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=user_prompt)],
+            ),
+        ]
+
+        response = await client.aio.models.generate_content(
+            model=model_name,
+            contents=gemini_contents,
+            config=config,
+        )
+        raw = response.text
+    else:
+        raise ValueError(f"Provider {provider} not supported.")
+
+    if not isinstance(raw, str):
+        return json.dumps(raw, ensure_ascii=False)
+    return raw
+
+
 class LLMAgent:
     def __init__(self, config: AgentConfig):
         self.config = config
-
-    def _anthropic_thinking(self) -> Optional[Dict[str, str]]:
-        if not getattr(self.config, "use_thinking", False):
-            return None
-        # Anthropic's current SDK deprecates fixed-budget "enabled" thinking for Claude 4.6.
-        return {"type": "adaptive"}
-
-    def _gemini_thinking_config(self, model_name: str) -> Optional[types.ThinkingConfig]:
-        if not getattr(self.config, "use_thinking", False):
-            return None
-
-        if model_name == "gemini-3.1-flash-lite-preview":
-            return types.ThinkingConfig(thinking_level="MINIMAL")
-
-        return types.ThinkingConfig(
-            thinking_budget=getattr(self.config, "thinking_budget", 16000),
-        )
 
     async def act(
         self,
@@ -197,114 +405,20 @@ Task:
 2. Revise your answer if you were persuaded.
 3. Critique the weakest ideas.
 4. Set support_for to the agent whose previous-round position you currently think is strongest.
-5. Set changed_mind to true if your answer materially changed.
+            5. Set changed_mind to true if your answer materially changed.
 """
-
-        provider = self.config.model.split("/")[0] if "/" in self.config.model else "openai"
-        model_name = self.config.model.split("/", 1)[1] if "/" in self.config.model else self.config.model
-
-        raw = None
-        if provider == "anthropic":
-            client = anthropic.AsyncAnthropic()
-            kwargs = {
-                "model": model_name,
-                "messages": [{"role": "user", "content": user_prompt}],
-                "system": base_system,
-                "temperature": self.config.temperature,
-                "max_tokens": 8192,
-            }
-            thinking = self._anthropic_thinking()
-            if thinking:
-                kwargs["thinking"] = thinking
-            if getattr(self.config, "use_web_search", False):
-                kwargs["tools"] = [{
-                    "name": "web_search",
-                    "type": "web_search_20250305",
-                    "user_location": {"type": "approximate", "timezone": "America/New_York"}
-                }]
-            response = await client.messages.create(**kwargs)
-            # Find the text block since reasoning block might exist
-            text_blocks = [b.text for b in response.content if getattr(b, "type", "") == "text"]
-            raw = text_blocks[0] if text_blocks else str(response.content)
-
-        elif provider == "openai":
-            client = openai.AsyncOpenAI()
-            if "gpt-5" in model_name:
-                kwargs = {
-                    "model": model_name,
-                    "input": [
-                        {"role": "system", "content": base_system},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "text": {"format": {"type": "text"}, "verbosity": "medium"}
-                }
-                if getattr(self.config, "use_thinking", False):
-                    kwargs["reasoning"] = {
-                        "effort": getattr(self.config, "reasoning_effort", "medium")
-                    }
-                if getattr(self.config, "use_web_search", False):
-                    kwargs["tools"] = [{
-                        "type": "web_search",
-                        "user_location": {"type": "approximate", "timezone": "America/New_York"},
-                        "search_context_size": "medium"
-                    }]
-                response = await client.responses.create(**kwargs)
-                # In new API, raw text sits inside output content parts
-                raw_extracted = None
-                if hasattr(response, "output"):
-                    for item in response.output:
-                        if type(item).__name__ == "ResponseOutputMessage" and hasattr(item, "content"):
-                            for block in item.content:
-                                if type(block).__name__ == "ResponseOutputText" and hasattr(block, "text"):
-                                    raw_extracted = block.text
-                                    break
-                            if raw_extracted:
-                                break
-                raw = raw_extracted if raw_extracted else str(response)
-            else:
-                response = await client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": base_system},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=self.config.temperature,
-                )
-                raw = response.choices[0].message.content
-
-        elif provider == "gemini":
-            import os
-            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            client = genai.Client(api_key=api_key)
-            config = types.GenerateContentConfig(
-                system_instruction=base_system,
-                temperature=self.config.temperature,
-            )
-            thinking_config = self._gemini_thinking_config(model_name)
-            if thinking_config:
-                config.thinking_config = thinking_config
-            if getattr(self.config, "use_web_search", False):
-                config.tools = [{"google_search": {}}]
-            
-            gemini_contents = [
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(text=user_prompt),
-                    ],
-                ),
-            ]
-
-            response = await client.aio.models.generate_content(
-                model=model_name,
-                contents=gemini_contents,
-                config=config
-            )
-            raw = response.text
-        else:
-            raise ValueError(f"Provider {provider} not supported.")
-        if not isinstance(raw, str):
-            raw = json.dumps(raw, ensure_ascii=False)
+        raw = await generate_text(
+            model=self.config.model,
+            system_prompt=base_system,
+            user_prompt=user_prompt,
+            temperature=self.config.temperature,
+            use_thinking=getattr(self.config, "use_thinking", False),
+            thinking_budget=getattr(self.config, "thinking_budget", 16000),
+            reasoning_effort=getattr(self.config, "reasoning_effort", "medium"),
+            use_web_search=getattr(self.config, "use_web_search", False),
+            max_output_tokens=TURN_MAX_OUTPUT_TOKENS,
+            verbosity="low",
+        )
 
         try:
             data = extract_json(raw)
@@ -332,6 +446,121 @@ Task:
 
         return turn
 
+    async def analyze(
+        self,
+        *,
+        question: str,
+        phase: Dict[str, str],
+        agent_names: List[str],
+        prev_phase: Optional[List[AnalysisTurn]] = None,
+    ) -> AnalysisTurn:
+        phase_key = phase["key"]
+        phase_label = phase["label"]
+
+        base_system = f"""\
+{self.config.system_prompt}
+
+You are participating in a structured multi-agent analysis workflow.
+Output ONLY valid JSON with this exact shape:
+
+{{
+  "answer": "your current best answer",
+  "claims": ["short claim 1", "short claim 2"],
+  "evidence": ["best supporting evidence or example 1", "best supporting evidence or example 2"],
+  "assumptions": ["assumption 1", "assumption 2"],
+  "uncertainties": ["uncertainty 1", "uncertainty 2"],
+  "critiques": [{{"target": "agent-2", "critique": "specific weakness"}}],
+  "confidence": 0.0
+}}
+
+Rules:
+- confidence must be between 0 and 1
+- keep each list concise and high-signal
+- cite dates or source cues inside evidence items when current facts matter
+- do not invent evidence you do not actually know
+- no markdown
+- no code fences
+- JSON only
+"""
+
+        if not prev_phase:
+            user_prompt = f"""\
+Question:
+{question}
+
+Phase: {phase_label}
+Your agent name: {self.config.name}
+
+Task:
+1. Clarify the question in concrete terms.
+2. Draft your current best answer.
+3. Surface the most important assumptions and uncertainties.
+4. Keep critiques empty in this first phase unless the prompt itself contains conflicting claims.
+"""
+        else:
+            prev_text = self._format_analysis_phase(prev_phase)
+            if phase_key == "research":
+                task = """\
+1. Review the prior analysis.
+2. Strengthen the best-supported answer with the strongest evidence, examples, or base rates you can justify.
+3. Call out missing evidence or brittle reasoning in critiques.
+4. Update your assumptions and uncertainties."""
+            else:
+                task = """\
+1. Review the prior analysis carefully.
+2. Pressure-test the strongest surviving answer.
+3. Attack weak assumptions, hidden leaps, and missing caveats in critiques.
+4. Revise your answer so it survives the strongest objections.
+5. Keep only the most decision-relevant claims and uncertainties."""
+
+            user_prompt = f"""\
+Question:
+{question}
+
+Phase: {phase_label}
+Your agent name: {self.config.name}
+
+Previous phase:
+{prev_text}
+
+Task:
+{task}
+"""
+
+        raw = await generate_text(
+            model=self.config.model,
+            system_prompt=base_system,
+            user_prompt=user_prompt,
+            temperature=self.config.temperature,
+            use_thinking=getattr(self.config, "use_thinking", False),
+            thinking_budget=getattr(self.config, "thinking_budget", 16000),
+            reasoning_effort=getattr(self.config, "reasoning_effort", "medium"),
+            use_web_search=getattr(self.config, "use_web_search", False),
+            max_output_tokens=TURN_MAX_OUTPUT_TOKENS,
+            verbosity="low",
+        )
+
+        try:
+            data = extract_json(raw)
+        except Exception:
+            data = {
+                "answer": raw,
+                "claims": [],
+                "evidence": [],
+                "assumptions": [],
+                "uncertainties": [],
+                "critiques": [],
+                "confidence": 0.5,
+            }
+
+        return normalize_analysis_turn(
+            data,
+            agent_name=self.config.name,
+            phase_key=phase_key,
+            phase_label=phase_label,
+            raw=raw,
+        )
+
     @staticmethod
     def _format_prev_round(prev_round: List[AgentTurn], support_tally: Counter) -> str:
         blocks = []
@@ -346,6 +575,28 @@ reasoning: {reasoning_text}
 confidence: {turn.confidence:.2f}
 supporters: {support_tally.get(turn.agent, 0)}
 changed_mind: {turn.changed_mind}
+                critiques: {critiques_text}"""
+            )
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _format_analysis_phase(prev_phase: List[AnalysisTurn]) -> str:
+        blocks = []
+        for turn in prev_phase:
+            critiques_text = json.dumps(turn.critiques, ensure_ascii=False)
+            claims_text = "; ".join(turn.claims) if turn.claims else "n/a"
+            evidence_text = "; ".join(turn.evidence) if turn.evidence else "n/a"
+            assumptions_text = "; ".join(turn.assumptions) if turn.assumptions else "n/a"
+            uncertainties_text = "; ".join(turn.uncertainties) if turn.uncertainties else "n/a"
+            blocks.append(
+                f"""\
+[{turn.agent}]
+answer: {turn.answer}
+claims: {claims_text}
+evidence: {evidence_text}
+assumptions: {assumptions_text}
+uncertainties: {uncertainties_text}
+confidence: {turn.confidence:.2f}
 critiques: {critiques_text}"""
             )
         return "\n\n".join(blocks)
@@ -397,6 +648,7 @@ class DebateOrchestrator:
 
         yield {
             "type": "start",
+            "workflow_mode": "debate",
             "question": question,
             "agent_names": agent_names,
             "max_rounds": self.max_rounds,
@@ -490,6 +742,7 @@ class DebateOrchestrator:
         final_answer = await self._synthesize(question, history, leader, converged, final_support)
 
         return {
+            "workflow_mode": "debate",
             "question": question,
             "converged": converged,
             "rounds_run": len(history),
@@ -514,9 +767,6 @@ class DebateOrchestrator:
             return winner_turn.answer
 
         transcript_text = self._format_history(history)
-        
-        provider = self.synthesizer_model.split("/")[0] if "/" in self.synthesizer_model else "openai"
-        model_name = self.synthesizer_model.split("/", 1)[1] if "/" in self.synthesizer_model else self.synthesizer_model
 
         system_prompt = (
             "You are a neutral moderator. Synthesize the best final answer from the debate. "
@@ -538,73 +788,14 @@ Write:
 2. Why this answer won
 3. Key caveats or assumptions
 """
-
-        if provider == "anthropic":
-            client = anthropic.AsyncAnthropic()
-            response = await client.messages.create(
-                model=model_name,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-                temperature=self.synthesizer_temperature,
-                max_tokens=8192,
-            )
-            content = response.content[0].text if response.content else ""
-        elif provider == "openai":
-            client = openai.AsyncOpenAI()
-            if "gpt-5" in model_name:
-                response = await client.responses.create(
-                    model=model_name,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    text={"format": {"type": "text"}, "verbosity": "medium"}
-                )
-                content_extracted = None
-                if hasattr(response, "output"):
-                    for item in response.output:
-                        if type(item).__name__ == "ResponseOutputMessage" and hasattr(item, "content"):
-                            for block in item.content:
-                                if type(block).__name__ == "ResponseOutputText" and hasattr(block, "text"):
-                                    content_extracted = block.text
-                                    break
-                            if content_extracted:
-                                break
-                content = content_extracted if content_extracted else str(response)
-            else:
-                response = await client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=self.synthesizer_temperature,
-                )
-                content = response.choices[0].message.content
-        elif provider == "gemini":
-            import os
-            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            client = genai.Client(api_key=api_key)
-            config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=self.synthesizer_temperature,
-            )
-            gemini_contents = [
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(text=user_prompt),
-                    ],
-                ),
-            ]
-            response = await client.aio.models.generate_content(
-                model=model_name,
-                contents=gemini_contents,
-                config=config
-            )
-            content = response.text
-        else:
-            raise ValueError(f"Provider {provider} not supported.")
+        content = await generate_text(
+            model=self.synthesizer_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=self.synthesizer_temperature,
+            max_output_tokens=FINAL_MAX_OUTPUT_TOKENS,
+            verbosity="medium",
+        )
 
         return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
 
@@ -641,4 +832,233 @@ Critiques: {json.dumps(t.critiques, ensure_ascii=False)}
 """
                 )
             chunks.append(f"Round support tally: {dict(support)}\n")
+        return "\n".join(chunks)
+
+
+class AnalysisOrchestrator:
+    def __init__(
+        self,
+        *,
+        agents: List[AgentConfig],
+        synthesizer_model: Optional[str] = None,
+        synthesizer_temperature: float = 0.2,
+        max_concurrent_agents: Optional[int] = None,
+    ):
+        if len(agents) < 2:
+            raise ValueError("You need at least 2 agents for a structured analysis.")
+
+        self.agent_wrappers = [LLMAgent(a) for a in agents]
+        self.synthesizer_model = synthesizer_model
+        self.synthesizer_temperature = synthesizer_temperature
+        self.max_concurrent_agents = max_concurrent_agents or len(agents)
+
+    async def run(self, question: str) -> Dict[str, Any]:
+        final_result = None
+        async for event in self.run_stream(question):
+            if event["type"] == "final":
+                final_result = event["result"]
+
+        if final_result is None:
+            raise RuntimeError("Analysis did not produce a final result.")
+
+        return final_result
+
+    async def run_stream(self, question: str) -> AsyncIterator[Dict[str, Any]]:
+        history: List[List[AnalysisTurn]] = []
+        semaphore = asyncio.Semaphore(self.max_concurrent_agents)
+        agent_names = [a.config.name for a in self.agent_wrappers]
+
+        yield {
+            "type": "start",
+            "workflow_mode": "analysis",
+            "question": question,
+            "agent_names": agent_names,
+            "phase_labels": [phase["label"] for phase in ANALYSIS_PHASES],
+        }
+
+        for phase_index, phase in enumerate(ANALYSIS_PHASES, start=1):
+            yield {
+                "type": "phase_started",
+                "phase_index": phase_index,
+                "phase_key": phase["key"],
+                "phase_label": phase["label"],
+                "phase_description": phase["description"],
+            }
+
+            prev_phase = history[-1] if history else None
+
+            async def run_one(agent: LLMAgent) -> AnalysisTurn:
+                async with semaphore:
+                    return await agent.analyze(
+                        question=question,
+                        phase=phase,
+                        agent_names=agent_names,
+                        prev_phase=prev_phase,
+                    )
+
+            results = await asyncio.gather(
+                *(run_one(agent) for agent in self.agent_wrappers),
+                return_exceptions=True,
+            )
+
+            turns: List[AnalysisTurn] = []
+            for agent, result in zip(self.agent_wrappers, results):
+                if isinstance(result, Exception):
+                    turns.append(self._failed_turn(agent.config.name, phase["key"], phase["label"], str(result)))
+                else:
+                    turns.append(result)
+
+            history.append(turns)
+
+            yield {
+                "type": "phase_completed",
+                "phase_index": phase_index,
+                "phase_key": phase["key"],
+                "phase_label": phase["label"],
+                "phase_description": phase["description"],
+                "turns": [asdict(t) for t in turns],
+            }
+
+        result = await self._build_result(question=question, history=history)
+        yield {"type": "final", "result": result}
+
+    async def _build_result(self, *, question: str, history: List[List[AnalysisTurn]]) -> Dict[str, Any]:
+        synthesis = await self._synthesize(question=question, history=history)
+        final_phase = history[-1]
+        winning_agent = str(synthesis.get("winning_agent") or self._pick_top_agent(final_phase)).strip()
+        if winning_agent not in {turn.agent for turn in final_phase}:
+            winning_agent = self._pick_top_agent(final_phase)
+
+        final_answer = str(synthesis.get("final_answer") or synthesis.get("executive_summary") or "").strip()
+        if not final_answer:
+            winner_turn = next((turn for turn in final_phase if turn.agent == winning_agent), final_phase[0])
+            final_answer = winner_turn.answer
+
+        return {
+            "workflow_mode": "analysis",
+            "question": question,
+            "phases_run": len(history),
+            "phase_labels": [phase["label"] for phase in ANALYSIS_PHASES[: len(history)]],
+            "winning_agent": winning_agent,
+            "executive_summary": str(synthesis.get("executive_summary") or "").strip(),
+            "final_answer": final_answer,
+            "why_this_answer": self._normalize_list(synthesis.get("why_this_answer")),
+            "uncertainties": self._normalize_list(synthesis.get("uncertainties")),
+            "alternatives": self._normalize_list(synthesis.get("alternatives")),
+            "follow_ups": self._normalize_list(synthesis.get("follow_ups")),
+            "transcript": [
+                {
+                    "phase_key": phase["key"],
+                    "phase_label": phase["label"],
+                    "phase_description": phase["description"],
+                    "turns": [asdict(turn) for turn in turns],
+                }
+                for phase, turns in zip(ANALYSIS_PHASES, history)
+            ],
+        }
+
+    async def _synthesize(self, *, question: str, history: List[List[AnalysisTurn]]) -> Dict[str, Any]:
+        final_phase = history[-1]
+        winning_agent = self._pick_top_agent(final_phase)
+        model = self.synthesizer_model or self.agent_wrappers[0].config.model
+        dossier = self._format_analysis_history(history)
+
+        system_prompt = (
+            "You are a neutral adjudicator and synthesizer. Produce the strongest possible final answer "
+            "from the structured multi-agent analysis. Prefer evidence-backed claims, preserve major "
+            "uncertainties, and avoid false precision."
+        )
+        user_prompt = f"""\
+Question:
+{question}
+
+Candidate agents:
+{[agent.config.name for agent in self.agent_wrappers]}
+
+Current leading agent by confidence:
+{winning_agent}
+
+Analysis dossier:
+{dossier}
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "winning_agent": "{winning_agent}",
+  "executive_summary": "2-4 sentence answer",
+  "final_answer": "full final answer",
+  "why_this_answer": ["reason 1", "reason 2"],
+  "uncertainties": ["uncertainty 1", "uncertainty 2"],
+  "alternatives": ["alternative interpretation 1"],
+  "follow_ups": ["follow-up question 1"]
+}}
+"""
+
+        raw = await generate_text(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=self.synthesizer_temperature,
+            max_output_tokens=FINAL_MAX_OUTPUT_TOKENS,
+            verbosity="medium",
+        )
+
+        try:
+            return extract_json(raw)
+        except Exception:
+            return {
+                "winning_agent": winning_agent,
+                "executive_summary": "",
+                "final_answer": raw,
+                "why_this_answer": [],
+                "uncertainties": [],
+                "alternatives": [],
+                "follow_ups": [],
+            }
+
+    @staticmethod
+    def _pick_top_agent(final_phase: List[AnalysisTurn]) -> str:
+        return max(final_phase, key=lambda turn: (turn.confidence, len(turn.evidence), len(turn.claims))).agent
+
+    @staticmethod
+    def _normalize_list(value: Any) -> List[str]:
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @staticmethod
+    def _failed_turn(agent_name: str, phase_key: str, phase_label: str, error_message: str) -> AnalysisTurn:
+        return AnalysisTurn(
+            agent=agent_name,
+            phase_key=phase_key,
+            phase_label=phase_label,
+            answer=f"Agent failed in {phase_label}: {error_message}",
+            claims=[],
+            evidence=[],
+            assumptions=[],
+            uncertainties=["The model call failed, so this agent provided no substantive analysis."],
+            critiques=[],
+            confidence=0.0,
+            raw=error_message,
+        )
+
+    @staticmethod
+    def _format_analysis_history(history: List[List[AnalysisTurn]]) -> str:
+        chunks = []
+        for phase, turns in zip(ANALYSIS_PHASES, history):
+            chunks.append(f"=== {phase['label'].upper()} ===")
+            for turn in turns:
+                chunks.append(
+                    f"""\
+Agent: {turn.agent}
+Answer: {turn.answer}
+Claims: {"; ".join(turn.claims) if turn.claims else "n/a"}
+Evidence: {"; ".join(turn.evidence) if turn.evidence else "n/a"}
+Assumptions: {"; ".join(turn.assumptions) if turn.assumptions else "n/a"}
+Uncertainties: {"; ".join(turn.uncertainties) if turn.uncertainties else "n/a"}
+Confidence: {turn.confidence:.2f}
+Critiques: {json.dumps(turn.critiques, ensure_ascii=False)}
+"""
+                )
         return "\n".join(chunks)
