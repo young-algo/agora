@@ -116,6 +116,23 @@ class LLMAgent:
     def __init__(self, config: AgentConfig):
         self.config = config
 
+    def _anthropic_thinking(self) -> Optional[Dict[str, str]]:
+        if not getattr(self.config, "use_thinking", False):
+            return None
+        # Anthropic's current SDK deprecates fixed-budget "enabled" thinking for Claude 4.6.
+        return {"type": "adaptive"}
+
+    def _gemini_thinking_config(self, model_name: str) -> Optional[types.ThinkingConfig]:
+        if not getattr(self.config, "use_thinking", False):
+            return None
+
+        if model_name == "gemini-3.1-flash-lite-preview":
+            return types.ThinkingConfig(thinking_level="MINIMAL")
+
+        return types.ThinkingConfig(
+            thinking_budget=getattr(self.config, "thinking_budget", 16000),
+        )
+
     async def act(
         self,
         *,
@@ -196,12 +213,9 @@ Task:
                 "temperature": self.config.temperature,
                 "max_tokens": 8192,
             }
-            if getattr(self.config, "use_thinking", False):
-                kwargs["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": getattr(self.config, "thinking_budget", 16000)
-                }
-                kwargs["temperature"] = 1.0
+            thinking = self._anthropic_thinking()
+            if thinking:
+                kwargs["thinking"] = thinking
             if getattr(self.config, "use_web_search", False):
                 kwargs["tools"] = [{
                     "name": "web_search",
@@ -266,15 +280,9 @@ Task:
                 system_instruction=base_system,
                 temperature=self.config.temperature,
             )
-            if getattr(self.config, "use_thinking", False):
-                if model_name == "gemini-3.1-flash-lite-preview":
-                    config.thinking_config = types.ThinkingConfig(
-                        thinking_level="MINIMAL",
-                    )
-                else:
-                    config.thinking_config = types.ThinkingConfig(
-                        thinking_budget_tokens=getattr(self.config, "thinking_budget", 16000),
-                    )
+            thinking_config = self._gemini_thinking_config(model_name)
+            if thinking_config:
+                config.thinking_config = thinking_config
             if getattr(self.config, "use_web_search", False):
                 config.tools = [{"google_search": {}}]
             
