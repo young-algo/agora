@@ -8,6 +8,7 @@ import {
     Loader2,
     Play,
     Plus,
+    Download,
     Save,
     Sparkles,
     Square,
@@ -55,6 +56,79 @@ function makeAgent(index) {
         reasoning_effort: "medium",
         use_web_search: false
     };
+}
+
+function buildResultMarkdown(result, question) {
+    const lines = [];
+    const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
+    lines.push(`# Agora — ${result.workflow_mode === "analysis" ? "Analysis" : "Debate"} Result`);
+    lines.push(`> ${ts}\n`);
+
+    if (question) lines.push(`## Question\n\n${question}\n`);
+
+    if (result.workflow_mode === "analysis") {
+        lines.push(`**Phases:** ${result.phases_run}  `);
+        lines.push(`**Winning agent:** ${result.winning_agent || "—"}\n`);
+        if (result.executive_summary) {
+            lines.push(`## Executive Summary\n\n${result.executive_summary}\n`);
+        }
+        lines.push(`## Final Answer\n\n${result.final_answer}\n`);
+        const sections = [
+            ["Why This Answer", result.why_this_answer],
+            ["Key Uncertainties", result.uncertainties],
+            ["Credible Alternatives", result.alternatives],
+            ["Follow-ups", result.follow_ups],
+        ];
+        for (const [title, items] of sections) {
+            if (items?.length) {
+                lines.push(`### ${title}\n`);
+                items.forEach((item) => lines.push(`- ${item}`));
+                lines.push("");
+            }
+        }
+    } else {
+        lines.push(`**Converged:** ${result.converged ? "Yes" : "No"}  `);
+        lines.push(`**Rounds:** ${result.rounds_run}  `);
+        lines.push(`**Leader:** ${result.leader}\n`);
+        lines.push(`## Final Answer\n\n${result.final_answer}\n`);
+    }
+
+    if (result.transcript?.length) {
+        lines.push(`## Transcript\n`);
+        for (const round of result.transcript) {
+            const turns = Array.isArray(round) ? round : round.turns || [];
+            const heading = round.phase_label
+                ? `### Phase: ${round.phase_label}`
+                : `### Round ${turns[0]?.round_num ?? "?"}`;
+            lines.push(heading + "\n");
+            for (const t of turns) {
+                lines.push(`#### ${t.agent} (confidence ${Number(t.confidence || 0).toFixed(2)})\n`);
+                lines.push(`${t.answer}\n`);
+                if (t.reasoning?.length) {
+                    lines.push("**Reasoning:**\n");
+                    t.reasoning.forEach((r) => lines.push(`- ${r}`));
+                    lines.push("");
+                }
+                if (t.critiques?.length) {
+                    lines.push("**Critiques:**\n");
+                    t.critiques.forEach((c) => lines.push(`- **${c.target}:** ${c.critique}`));
+                    lines.push("");
+                }
+            }
+        }
+    }
+
+    return lines.join("\n");
+}
+
+function downloadMarkdown(text, filename) {
+    const blob = new Blob([text], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 function createPayload(config) {
@@ -809,29 +883,44 @@ export default function App() {
                             }
                         >
                             {runState.finalResult ? (
-                                isAnalysisMode ? (
-                                    <AnalysisFinalAnswer result={runState.finalResult} />
-                                ) : (
-                                    <div className="space-y-4">
-                                        <div className="flex flex-wrap gap-2">
-                                            <span className="badge-soft">
-                                                Converged: {runState.finalResult.converged ? "Yes" : "No"}
-                                            </span>
-                                            <span className="badge-soft">
-                                                Rounds: {runState.finalResult.rounds_run}
-                                            </span>
-                                            <span className="badge-soft">
-                                                Leader: {runState.finalResult.leader}
-                                            </span>
-                                        </div>
-
-                                        <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-5">
-                                            <pre className="whitespace-pre-wrap text-sm leading-7 text-slate-100">
-                                                {runState.finalResult.final_answer}
-                                            </pre>
-                                        </div>
+                                <div className="space-y-4">
+                                    <div className="flex justify-end">
+                                        <button
+                                            className="btn-secondary flex items-center gap-1.5 text-xs"
+                                            onClick={() => {
+                                                const md = buildResultMarkdown(runState.finalResult, config.question);
+                                                const slug = config.question.slice(0, 40).replace(/[^a-zA-Z0-9]+/g, "-").replace(/-$/, "");
+                                                downloadMarkdown(md, `agora-${slug}.md`);
+                                            }}
+                                        >
+                                            <Download className="h-3.5 w-3.5" />
+                                            Save as Markdown
+                                        </button>
                                     </div>
-                                )
+                                    {isAnalysisMode ? (
+                                        <AnalysisFinalAnswer result={runState.finalResult} />
+                                    ) : (
+                                        <>
+                                            <div className="flex flex-wrap gap-2">
+                                                <span className="badge-soft">
+                                                    Converged: {runState.finalResult.converged ? "Yes" : "No"}
+                                                </span>
+                                                <span className="badge-soft">
+                                                    Rounds: {runState.finalResult.rounds_run}
+                                                </span>
+                                                <span className="badge-soft">
+                                                    Leader: {runState.finalResult.leader}
+                                                </span>
+                                            </div>
+
+                                            <div className="result-surface">
+                                                <pre className="whitespace-pre-wrap text-sm leading-7">
+                                                    {runState.finalResult.final_answer}
+                                                </pre>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
                             ) : (
                                 <EmptyState
                                     icon={<Sparkles className="h-5 w-5" />}
@@ -1457,17 +1546,13 @@ function AnalysisFinalAnswer({ result }) {
             </div>
 
             {result.executive_summary ? (
-                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/6 p-5">
-                    <p className="whitespace-pre-wrap text-sm leading-7 text-cyan-50">
-                        {result.executive_summary}
-                    </p>
+                <div className="result-callout">
+                    <p className="whitespace-pre-wrap text-sm leading-7">{result.executive_summary}</p>
                 </div>
             ) : null}
 
-            <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-5">
-                <pre className="whitespace-pre-wrap text-sm leading-7 text-slate-100">
-                    {result.final_answer}
-                </pre>
+            <div className="result-surface">
+                <pre className="whitespace-pre-wrap text-sm leading-7">{result.final_answer}</pre>
             </div>
 
             <ListBlock title="Why this answer" items={result.why_this_answer} emptyText="" />

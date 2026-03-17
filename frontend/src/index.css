@@ -158,8 +158,11 @@ body {
 
   .logo-text {
     @apply text-5xl font-semibold tracking-tight text-transparent bg-clip-text;
+    display: inline-block;
     font-family: "Overused Grotesk", sans-serif;
     background-image: linear-gradient(110deg, var(--accent-soft), var(--accent));
+    line-height: 1.12;
+    padding-bottom: 0.12em;
   }
 
   .glass-panel {
@@ -175,6 +178,22 @@ body {
     border-color: var(--border-strong);
     background: var(--surface-2);
     padding: calc(var(--panel-pad) * 0.72);
+  }
+
+  .result-callout {
+    @apply rounded-2xl border;
+    border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+    padding: calc(var(--panel-pad) * 0.9);
+    color: var(--text-strong);
+  }
+
+  .result-surface {
+    @apply rounded-2xl border;
+    border-color: var(--border-soft);
+    background: color-mix(in srgb, var(--surface-3) 92%, transparent);
+    padding: calc(var(--panel-pad) * 0.9);
+    color: var(--text-main);
   }
 
   .input-surface {

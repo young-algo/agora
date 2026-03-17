@@ -1,0 +1,30 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102544" />
+      <stop offset="1" stop-color="#060D1D" />
+    </linearGradient>
+    <linearGradient id="mark" x1="19" y1="18" x2="44" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#82DFEC" />
+      <stop offset="1" stop-color="#41C7DA" />
+    </linearGradient>
+    <filter id="glow" x="10" y="12" width="44" height="40" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="2.5" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="18" fill="url(#bg)" />
+  <rect x="4.75" y="4.75" width="54.5" height="54.5" rx="17.25" stroke="#D7F6FB" stroke-opacity="0.12" stroke-width="1.5" />
+  <path
+    d="M19 45L32 19L45 45M24.5 34.5H39.5"
+    stroke="url(#mark)"
+    stroke-width="5.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#glow)"
+  />
+  <circle cx="32" cy="48.5" r="2.5" fill="#82DFEC" fill-opacity="0.9" />
+</svg>
