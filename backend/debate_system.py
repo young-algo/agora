@@ -12,8 +12,8 @@ import openai
 from google import genai
 from google.genai import types
 
-TURN_MAX_OUTPUT_TOKENS = 2048
-FINAL_MAX_OUTPUT_TOKENS = 3072
+TURN_MAX_OUTPUT_TOKENS = 18432
+FINAL_MAX_OUTPUT_TOKENS = 27648
 
 ANALYSIS_PHASES = [
     {
@@ -197,6 +197,93 @@ def normalize_analysis_turn(
     )
 
 
+def _ensure_debate_completeness(data: Dict[str, Any], *, agent_name: str, agent_names: List[str]) -> Dict[str, Any]:
+    """Fill in missing or empty required fields so every agent turn has uniform structure."""
+    data = dict(data)
+
+    # Ensure answer is substantive
+    answer = str(data.get("answer") or "").strip()
+    if not answer:
+        answer = "(No answer provided)"
+    data["answer"] = answer
+
+    # Ensure reasoning has at least 2 items
+    reasoning = data.get("reasoning", [])
+    if isinstance(reasoning, str):
+        reasoning = [reasoning] if reasoning.strip() else []
+    reasoning = [str(r).strip() for r in reasoning if str(r).strip()]
+    if len(reasoning) < 1:
+        reasoning.append(f"Primary position based on the analysis above.")
+    if len(reasoning) < 2:
+        reasoning.append(f"No additional reasoning points were articulated.")
+    data["reasoning"] = reasoning
+
+    # Ensure critiques is a non-empty list
+    critiques = data.get("critiques", [])
+    if not isinstance(critiques, list):
+        critiques = []
+    if not critiques:
+        critiques = [{"target": agent_name, "critique": "No specific critiques were articulated this round."}]
+    data["critiques"] = critiques
+
+    # Ensure confidence exists and is numeric
+    try:
+        data["confidence"] = float(data.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        data["confidence"] = 0.5
+
+    # Ensure support_for and changed_mind exist
+    if not data.get("support_for"):
+        data["support_for"] = agent_name
+    if "changed_mind" not in data:
+        data["changed_mind"] = False
+
+    return data
+
+
+def _ensure_analysis_completeness(data: Dict[str, Any], *, agent_name: str) -> Dict[str, Any]:
+    """Fill in missing or empty required fields so every analysis turn has uniform structure."""
+    data = dict(data)
+
+    # Ensure answer is substantive
+    answer = str(data.get("answer") or "").strip()
+    if not answer:
+        answer = "(No answer provided)"
+    data["answer"] = answer
+
+    # Ensure each list field has at least the minimum entries
+    list_minimums = {
+        "claims": (2, "No additional claims were articulated."),
+        "evidence": (2, "No specific evidence was cited."),
+        "assumptions": (2, "No additional assumptions were identified."),
+        "uncertainties": (1, "No specific uncertainties were identified."),
+    }
+    for field, (minimum, placeholder) in list_minimums.items():
+        items = data.get(field, [])
+        if isinstance(items, str):
+            items = [items] if items.strip() else []
+        items = [str(item).strip() for item in items if str(item).strip()]
+        while len(items) < minimum:
+            items.append(placeholder)
+        data[field] = items
+
+    # Ensure critiques is a non-empty list
+    critiques = data.get("critiques", [])
+    if not isinstance(critiques, list):
+        critiques = []
+    if not critiques:
+        critiques = [{"target": agent_name, "critique": "No specific critiques were articulated this phase."}]
+    data["critiques"] = critiques
+
+    # Ensure confidence exists and is numeric
+    try:
+        data["confidence"] = float(data.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        data["confidence"] = 0.5
+
+    return data
+
+
 def _anthropic_thinking(use_thinking: bool) -> Optional[Dict[str, str]]:
     if not use_thinking:
         return None
@@ -264,7 +351,10 @@ async def generate_text(
                 "type": "web_search_20250305",
                 "user_location": {"type": "approximate", "timezone": "America/New_York"},
             }]
-        response = await client.messages.create(**kwargs)
+        # Use streaming to avoid the 10-minute timeout on long requests.
+        text_blocks: list[str] = []
+        async with client.messages.stream(**kwargs) as stream:
+            response = await stream.get_final_message()
         text_blocks = [block.text for block in response.content if getattr(block, "type", "") == "text"]
         raw = text_blocks[0] if text_blocks else str(response.content)
     elif provider == "openai":
@@ -276,7 +366,7 @@ async def generate_text(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "text": {"format": {"type": "text"}, "verbosity": verbosity},
+                "text": {"format": {"type": "json_object"}, "verbosity": verbosity},
                 "max_output_tokens": max_output_tokens,
             }
             if use_thinking:
@@ -298,6 +388,7 @@ async def generate_text(
                 ],
                 temperature=temperature,
                 max_tokens=max_output_tokens,
+                response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content
     elif provider == "gemini":
@@ -305,14 +396,17 @@ async def generate_text(
 
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         client = genai.Client(api_key=api_key)
+        thinking_config = _gemini_thinking_config(model_name, use_thinking, thinking_budget)
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
         )
-        thinking_config = _gemini_thinking_config(model_name, use_thinking, thinking_budget)
         if thinking_config:
+            # Gemini thinking mode is incompatible with response_mime_type on some models.
             config.thinking_config = thinking_config
+        else:
+            config.response_mime_type = "application/json"
         if use_web_search:
             config.tools = [{"google_search": {}}]
 
@@ -354,25 +448,39 @@ class LLMAgent:
 {self.config.system_prompt}
 
 You are in a structured multi-agent debate.
-Output ONLY valid JSON with this exact shape:
+
+# OUTPUT FORMAT (STRICT)
+
+You MUST output ONLY a single JSON object. No markdown, no code fences, no commentary.
+Every field listed below is REQUIRED and must be populated — never leave a list empty.
 
 {{
-  "answer": "your current best answer",
-  "reasoning": ["short point 1", "short point 2"],
-  "critiques": [{{"target": "agent-2", "critique": "specific weakness"}}],
-  "confidence": 0.0,
-  "support_for": "{self.config.name}",
-  "changed_mind": false
+  "answer": "<your complete current best answer — at least 2-3 sentences>",
+  "reasoning": [
+    "<first key reason supporting your answer>",
+    "<second key reason supporting your answer>"
+  ],
+  "critiques": [
+    {{"target": "<name of another agent>", "critique": "<specific weakness in their position>"}}
+  ],
+  "confidence": <number between 0.0 and 1.0>,
+  "support_for": "<agent name you think has the strongest position>",
+  "changed_mind": <true or false>
 }}
 
-Rules:
-- confidence must be between 0 and 1
-- support_for must be one of: {agent_names}
-- be intellectually honest
-- if another agent is better, support them
-- no markdown
-- no code fences
-- JSON only
+# FIELD REQUIREMENTS
+
+- answer: REQUIRED. Must be a substantive response of at least 2-3 sentences. Never truncate.
+- reasoning: REQUIRED. Must contain at least 2 distinct points. Each point should be a complete sentence.
+- critiques: REQUIRED. Must contain at least 1 critique per other agent when prior answers exist. In round 1, include at least 1 entry noting a potential weakness in your OWN position (target: your own name).
+- confidence: REQUIRED. A number between 0.0 and 1.0 reflecting genuine certainty.
+- support_for: REQUIRED. Must be exactly one of: {agent_names}
+- changed_mind: REQUIRED. Boolean — true if your answer materially changed from last round.
+
+# RULES
+
+- Be intellectually honest — if another agent has a better answer, support them.
+- Do NOT output anything before or after the JSON object.
 """
 
         if not prev_round:
@@ -432,6 +540,8 @@ Task:
                 "changed_mind": False,
             }
 
+        data = _ensure_debate_completeness(data, agent_name=self.config.name, agent_names=agent_names)
+
         turn = normalize_turn(
             data,
             agent_name=self.config.name,
@@ -461,26 +571,50 @@ Task:
 {self.config.system_prompt}
 
 You are participating in a structured multi-agent analysis workflow.
-Output ONLY valid JSON with this exact shape:
+
+# OUTPUT FORMAT (STRICT)
+
+You MUST output ONLY a single JSON object. No markdown, no code fences, no commentary.
+Every field listed below is REQUIRED and must be populated — never leave a list empty.
 
 {{
-  "answer": "your current best answer",
-  "claims": ["short claim 1", "short claim 2"],
-  "evidence": ["best supporting evidence or example 1", "best supporting evidence or example 2"],
-  "assumptions": ["assumption 1", "assumption 2"],
-  "uncertainties": ["uncertainty 1", "uncertainty 2"],
-  "critiques": [{{"target": "agent-2", "critique": "specific weakness"}}],
-  "confidence": 0.0
+  "answer": "<your complete current best answer — at least 2-3 sentences>",
+  "claims": [
+    "<first concrete, falsifiable claim>",
+    "<second concrete, falsifiable claim>"
+  ],
+  "evidence": [
+    "<best supporting evidence or example, with dates/source cues when relevant>",
+    "<second piece of supporting evidence>"
+  ],
+  "assumptions": [
+    "<first key assumption underlying your answer>",
+    "<second key assumption>"
+  ],
+  "uncertainties": [
+    "<first significant uncertainty or unknown>",
+    "<second significant uncertainty>"
+  ],
+  "critiques": [
+    {{"target": "<agent name>", "critique": "<specific weakness in their analysis>"}}
+  ],
+  "confidence": <number between 0.0 and 1.0>
 }}
 
-Rules:
-- confidence must be between 0 and 1
-- keep each list concise and high-signal
-- cite dates or source cues inside evidence items when current facts matter
-- do not invent evidence you do not actually know
-- no markdown
-- no code fences
-- JSON only
+# FIELD REQUIREMENTS
+
+- answer: REQUIRED. Must be a substantive response of at least 2-3 sentences. Never truncate.
+- claims: REQUIRED. Must contain at least 2 concrete, falsifiable claims.
+- evidence: REQUIRED. Must contain at least 2 items. Cite dates or source cues when current facts matter. Do not invent evidence you do not actually know.
+- assumptions: REQUIRED. Must contain at least 2 assumptions underlying your answer.
+- uncertainties: REQUIRED. Must contain at least 1 significant uncertainty or unknown.
+- critiques: REQUIRED. In the first phase, include at least 1 critique of a potential weakness in your OWN analysis. In later phases, include at least 1 critique per other agent.
+- confidence: REQUIRED. A number between 0.0 and 1.0 reflecting genuine certainty.
+
+# RULES
+
+- Keep each list concise and high-signal — quality over quantity.
+- Do NOT output anything before or after the JSON object.
 """
 
         if not prev_phase:
@@ -552,6 +686,8 @@ Task:
                 "critiques": [],
                 "confidence": 0.5,
             }
+
+        data = _ensure_analysis_completeness(data, agent_name=self.config.name)
 
         return normalize_analysis_turn(
             data,
